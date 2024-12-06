@@ -24,11 +24,12 @@
 #include <stdlib.h>
 #include <math.h>
 #include <string.h>
-#include "./utils.h"
+#include <assert.h>
+#include <time.h>
+
+#include "utils.h"
 #include "delaunay.h"
 #include "predicates.c"
-#include "assert.h"
-#include <time.h>
 
 /******************************************************************************/
 

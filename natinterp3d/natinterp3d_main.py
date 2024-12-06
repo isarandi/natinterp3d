@@ -7,21 +7,21 @@ from natinterp3d.natinterp3d_cython import MeshesAndVerticesParallel, MeshAndVer
 
 class Interpolator:
     def __init__(self, data_points, parallel=True, num_threads=None):
-        data_points = np.asarray(data_points, np.float64)
-
+        self.data_points = np.asarray(data_points, np.float64)
         if parallel:
             # we use os.sched_getaffinity(0) to determine the number of threads to use.
             # os.cpu_count() would be the obvious choice, but that one will give the total
             # count on the machine. But in a Slurm job, for example, we may only be able to use
             # a subset. os.sched_getaffinity(0) will give the number of threads we can use.
             num_threads = len(os.sched_getaffinity(0)) if num_threads is None else num_threads
-            self.mesh_and_vertices = MeshesAndVerticesParallel(data_points, num_threads)
+            self.mesh_and_vertices = MeshesAndVerticesParallel(self.data_points, num_threads)
         else:
-            self.mesh_and_vertices = MeshAndVertices(data_points)
+            self.mesh_and_vertices = MeshAndVertices(self.data_points)
 
     def get_weights(self, query_points):
+        query_points = np.asarray(query_points, np.float64)
         return self.mesh_and_vertices.get_natural_interpolation_weights(
-            np.asarray(query_points, np.float64)).astype(query_points.dtype)
+            query_points).astype(query_points.dtype)
 
     def interpolate(self, query_points, values):
         weights = self.get_weights(query_points)

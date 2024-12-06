@@ -27,9 +27,9 @@
 /******************************************************************************/
 #ifndef delaunay_h
 #define delaunay_h
+#include <stdbool.h>
 #include "utils.h"
 #include "kdtree.h"
-#include <stdbool.h>
 /******************************************************************************/
 
 /* These macros make code more readable. They allow us to access  

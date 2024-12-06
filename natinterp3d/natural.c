@@ -7,11 +7,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
+#include <omp.h>
+#include <assert.h>
 #include "delaunay.h"
-#include "assert.h"
 #include "utils.h"
 #include "natural.h"
-#include <omp.h>
+
 
 /******************************************************************************/
 /* Set this to run tests, and include debugging information.                  */

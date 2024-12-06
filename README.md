@@ -19,7 +19,6 @@ The modifications are:
 * k-d tree for faster search for the containing simplex of an inserted point
 
 
----
 
 ## Usage
 
@@ -59,5 +58,10 @@ interpolated_values = interpolator.interpolate(queries, values)
 
 # or:
 weights = interpolator.get_weights(queries)
-
 ```
+
+Multithreaded computation is automatically enabled. To customize, use the argument `parallel=True/False` and  `num_threads` in `interpolate` or `get_weights`. With `num_threads=None` (default), the number of threads is automatically determined based on the available CPU cores.
+
+## License
+
+GNU GPL v3

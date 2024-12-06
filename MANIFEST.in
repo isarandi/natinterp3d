@@ -1,0 +1,2 @@
+include natinterp3d/*.h
+include natinterp3d/*.c
