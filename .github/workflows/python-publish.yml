@@ -26,7 +26,7 @@ jobs:
       - name: Repair wheels with manylinux
         run: |
           docker run --rm -v $(pwd):/io quay.io/pypa/manylinux2014_x86_64 /bin/bash -c \
-          "cd /io && python3 -m pip install auditwheel && auditwheel repair dist/*.whl -w wheelhouse/"
+          "cd /io && /opt/python/cp310-cp310/bin/python -m pip install auditwheel && auditwheel repair dist/*.whl -w wheelhouse/"
 
       - name: Upload repaired wheels as artifact
         uses: actions/upload-artifact@v4
