@@ -17,7 +17,7 @@ cdef extern from "delaunay.h":
     ctypedef struct mesh:
         pass
     ctypedef struct vertex:
-        pass
+        double voronoiVolume
 
     mesh* copyMesh(mesh *m);
     void freeMesh(mesh *m);

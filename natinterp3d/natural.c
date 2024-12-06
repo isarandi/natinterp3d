@@ -104,6 +104,7 @@ void getUnnormalizedWeightsSingleQuery(
     // (Note: counterintuitively, we first calculate the volumes when the new point is included,
     // then we remove the point again and recalculate the volumes without the point. This is
     // because we don't know who the neighbors are before inserting our point.)
+
     for (i = 0; i < arrayListSize(neighbours); i++) {
         vertex *neighborVertex = getFromArrayList(neighbours, i);
         simplex *neighborSimplex = getFromArrayList(neighbourSimplicies, i);
@@ -139,6 +140,7 @@ void getUnnormalizedWeightsSingleQuery(
             }
             double vol = voronoiCellVolume(vc, neighborVertex);
             double* voronoiVolumePtr = &neighborVertex->voronoiVolume;
+
             #pragma omp atomic write
             *voronoiVolumePtr = vol;
 
@@ -261,14 +263,11 @@ void getNaturalInterpolationWeightsParallel(
     int** weightColIndsPerQuery = malloc(numQueryPoints * sizeof(int*));
     // and we need the number of neighbors for each query point. We allocate an array to hold these:
     int* numNeighborsPerQuery = malloc(numQueryPoints * sizeof(int));
-
     omp_set_num_threads(numThreads);
-    #pragma omp parallel for schedule(guided)
+    #pragma omp parallel for schedule(dynamic)
     for (int i = 0; i < numQueryPoints; ++i) {
         double* localWeightsTemp = malloc(numDataPoints * sizeof(double));
         int* localNeighborIndicesTemp = malloc(numDataPoints * sizeof(int));
-        //fprintf(stderr, "Thread %d: %d\n", omp_get_thread_num(), i);
-
         getUnnormalizedWeightsSingleQuery(
                 queryPoints[i * 3],
                 queryPoints[i * 3 + 1],
@@ -297,7 +296,6 @@ void getNaturalInterpolationWeightsParallel(
         free(localWeightsTemp);
         free(localNeighborIndicesTemp);
     }
-
 
     // Now we build the CSR matrix
     int weightValuesSize = 0;

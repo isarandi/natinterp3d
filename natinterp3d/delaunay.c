@@ -115,7 +115,6 @@ void buildMesh(vertex *ps, int n, mesh *m) {
     // This simplex will contain our entire point-set.
     initSuperSimplex(ps, n, m);
     addSimplexToMesh(m, m->super);
-
     int i, j;
     // Add each point to the mesh 1-by-1 using the Edge Flipping technique.
     for (i = 0; i < n; i++) {
@@ -154,11 +153,7 @@ void buildMesh(vertex *ps, int n, mesh *m) {
             (s->p[0]->v[1] + s->p[1]->v[1] + s->p[2]->v[1] + s->p[3]->v[1]) / 4,
             (s->p[0]->v[2] + s->p[1]->v[2] + s->p[2]->v[2] + s->p[3]->v[2]) / 4,
             i);
-        m->simplicies_kd[i] = s;
-        i++;
-        if (i % 1 == 0) {
-            //fprintf(stderr, "Building KD-Tree: %d%%.\n", (int)(i/(double)getNumSimplicies(m) *100));
-        }
+        m->simplicies_kd[i++] = s;
     }
 
 }
@@ -243,7 +238,6 @@ void orientationTest(linkedList *tets) {
 /******************************************************************************/
 
 int delaunayTest(mesh *m, vertex *ps, int n) {
-
     listNode *iter = topOfLinkedList(m->tets);
     simplex *s;
 
@@ -402,26 +396,19 @@ simplex *findContainingSimplex(mesh *m, vertex *p) {
         kd_res_free(res);
 
         s = m->simplicies_kd[kd_id];
-        //fprintf(stderr, "kd_id: %d, s=[%f, %f, %f], p=[%f, %f, %f]\n", kd_id, s->p[0]->v[0], s->p[0]->v[1], s->p[0]->v[2], p->v[0], p->v[1], p->v[2]);
     }
     vertex *v1, *v2, *v3;
 
-    int i;
-    int steps = 0;
-    for (i = 0; i < 4; i++) {
+    for (int i = 0; i < 4; i++) {
         // get the orientation of this face.
         getFaceVerticies3(s, i, &v1, &v2, &v3);
-
-        if ((orient3dfast(v1->v, v2->v, v3->v, p->v) < 0) && s->s[i]) {
+        if (s->s[i] && orient3dfast(v1->v, v2->v, v3->v, p->v) < 0) {
             // orientation test failed, the seeked point is towards the ith neighbor
             // we have this neighbor, start again from i=0 (the i++ will increment it, hence i=-1)
             s = s->s[i];
-            // make sure flushed to print
             i = -1;
-            steps++;
         }
     }
-    //fprintf(stderr, "steps: %d\n", steps);
     // All the orientation tests passed: the point lies within/on the simplex.
     return s;
 }
@@ -499,11 +486,9 @@ int simplexContainsPoint(simplex *s, vertex *p) {
     // the plane defined by each triangular face of our given simplex.
     // if the sign is always negative then the point lies within the simplex.
 
-    int i;
-
     // The points on this face.
     vertex *p1, *p2, *p3;
-    for (i = 0; i < 4; i++) {
+    for (int i = 0; i < 4; i++) {
         // Get the face values for this simplex.
         getFaceVerticies3(s, i, &p1, &p2, &p3);
         if (orient3dfast(p1->v, p2->v, p3->v, p->v) < 0) { return 0; }
@@ -525,13 +510,11 @@ void writeTetsToFile(mesh *m) {
     simplex *s;
     listNode *iter = topOfLinkedList(m->tets);
 
-    int i;
     while ((s = nextElement(m->tets, &iter))) {
         int super = 0;
-        for (i = 0; i < 4; i++) {
+        for (int i = 0; i < 4; i++) {
             if (pointOnSimplex(s->p[i], m->super)) { super = 1; }
         }
-
         if (!super) {
             fprintf(f, "%d %d %d %d\n", s->p[0]->index, s->p[1]->index,
                     s->p[2]->index, s->p[3]->index);
@@ -1386,7 +1369,6 @@ void initSuperSimplex(vertex *ps, int n, mesh *m) {
     m->superVerticies[0].Y = max.Y + 3 * range.Y;
     m->superVerticies[0].Z = min.Z - range.Z;
 
-
     m->superVerticies[1].X = max.X + 2 * range.X;
     m->superVerticies[1].Y = min.Y - 2 * range.Y;
     m->superVerticies[1].Z = min.Z - range.Z;
@@ -1401,7 +1383,7 @@ void initSuperSimplex(vertex *ps, int n, mesh *m) {
 
     // The super-simplex doesn't have any neighbours.
     for (i = 0; i < 4; i++) {
-        m->superVerticies[i].index = 0;
+        m->superVerticies[i].index = -1 - i;
         m->super->p[i] = &m->superVerticies[i];
         m->super->s[i] = NULL;
     }
@@ -1498,50 +1480,39 @@ mesh *newMesh() {
 // but the simplex neighborhoods change when inserting points, so they need to be copied
 mesh* copyMesh(mesh* m) {
     mesh* newm = newMesh();
+    int numSimplicies = getNumSimplicies(m);
+    newm->simplicies_kd = malloc(sizeof(simplex*) * numSimplicies);
 
-    listNode* iter = topOfLinkedList(m->tets);
-    newm->coplanar_degenerecies = m->coplanar_degenerecies;
-    newm->cospherical_degenerecies = m->cospherical_degenerecies;
-
-    newm->simplicies_kd = malloc(sizeof(simplex*) * getNumSimplicies(m));
-
-    simplex* s;
-    int i = 0;
-    // iterate once, to make a copy of each simplex
-    while ((s = nextElement(m->tets, &iter))) {
-        simplex* copy = newSimplex(newm);
-        copy->p[0] = s->p[0];
-        copy->p[1] = s->p[1];
-        copy->p[2] = s->p[2];
-        copy->p[3] = s->p[3];
-        s->copy = copy;
-        addSimplexToMesh(newm, copy);
-        newm->simplicies_kd[i] = copy;
-        i++;
+    // copy the super simplex
+    newm->super = malloc(sizeof(simplex));
+    m->super->copy = newm->super;
+    for (int j = 0; j < 4; j++) {
+        newm->super->p[j] = m->super->p[j];
+        newm->super->s[j] = NULL; // super simplex has no neighbors
     }
-
-    // iterate again, to copy the neighbor pointers (now pointing to the copied simplices)
-    iter = topOfLinkedList(m->tets);
-    while ((s = nextElement(m->tets, &iter))) {
-        simplex* copy = s->copy;
-        for (int i = 0; i < 4; i++) {
-            simplex* s2 = s->s[i];
-            if (s2) {
-                copy->s[i] = s2->copy;
+    // iterate once, to make a copy of each simplex
+    for (int i=0; i<numSimplicies; i++) {
+        simplex* s = m->simplicies_kd[i];
+        simplex* sCopy = newSimplex(newm);
+        for (int j = 0; j < 4; j++) {
+            sCopy->p[j] = s->p[j];
+        }
+        s->copy = sCopy;
+        addSimplexToMesh(newm, sCopy);
+        newm->simplicies_kd[i] = sCopy;
+    }
+    // iterate again, to copy the neighbor pointers (to point to the copied simplices)
+    for (int i=0; i < numSimplicies; i++) {
+        simplex* s = m->simplicies_kd[i];
+        simplex* sCopy = s->copy;
+        for (int j = 0; j < 4; j++) {
+            if (s->s[j]) {
+                sCopy->s[j] = s->s[j]->copy;
             } else {
-                copy->s[i] = NULL;
+                sCopy->s[j] = NULL;
             }
         }
     }
-
-    newm->super = newSimplex(m);
-
-    for (int i = 0; i < 4; i++) {
-        newm->superVerticies[i] = m->superVerticies[i];
-        newm->super->p[i] = &newm->superVerticies[i];
-        newm->super->s[i] = NULL;
-    }
-
     newm->kd = m->kd;
     newm->owns_kd = false;
     return newm;

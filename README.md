@@ -7,9 +7,10 @@ where you have a set of sample *values* of a function at arbitrary locations in 
 and you want to interpolate the function value at other points (let's call them *queries*).
 
 Specifically, in natural neighbor interpolation, the interpolated value is a weighted average of
-the function values of the query point's "natural neighbors", which are the vertices of the Voronoi cell that contains the query point.
-The weights are proportional to the volumes of the sub-Voronoi cells corresponding to each natural neighbor
-that we would obtain if the query point was inserted into the Voronoi tetrahedralization. 
+the function values of the query point's "natural neighbors".
+The natural neighbors of a query point are those vertices which, if we were to add the query point to the data, would
+have Voronoi cells sharing a face with the query point's Voronoi cell.
+The weights are proportional to the volume "stolen" from the neighbor's Voronoi cell upon the query point's insertion. 
 
 This package uses Cython to wrap my modified version of Ross Hemsley's [interpolate3d](https://code.google.com/archive/p/interpolate3d/).
 The modifications are:
@@ -17,8 +18,6 @@ The modifications are:
 * parallelization via OpenMP
 * option to extract the natural neighbor weights (Sibson coordinates) directly (the original version only gives the final interpolated value, but not the weights)
 * k-d tree for faster search for the containing simplex of an inserted point
-
-
 
 ## Usage
 
