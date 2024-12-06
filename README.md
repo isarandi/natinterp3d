@@ -18,7 +18,15 @@ The modifications are:
 * option to extract the natural neighbor weights (Sibson coordinates) directly (the original version only gives the final interpolated value, but not the weights)
 * k-d tree for faster search for the containing simplex of an inserted point
 
+## Installation
 
+For now, install via:
+
+```
+pip install git+https://github.com/isarandi/natinterp3d.git
+```
+
+Publishing to PyPI is planned.
 
 ## Usage
 
