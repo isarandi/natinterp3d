@@ -1,4 +1,5 @@
 # Natural Neighbor Interpolation in 3D
+![PyPI - Version](https://img.shields.io/pypi/v/natinterp3d)
 
 This is a Python package for 3D [natural neighbor interpolation](https://en.wikipedia.org/wiki/Natural-neighbor_interpolation) (Sibson interpolation).
 
@@ -21,13 +22,11 @@ The modifications are:
 
 ## Installation
 
-For now, install via:
+natinterp3d is available on PyPI:
 
 ```
-pip install git+https://github.com/isarandi/natinterp3d.git
+pip install natinterp3d
 ```
-
-Publishing to PyPI is planned.
 
 ## Usage
 
