@@ -16,8 +16,6 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-          - os: macos-13
-            macos_deployment_target: "13.0"
           - os: macos-14
             macos_deployment_target: "14.0"
           - os: windows-latest
@@ -31,7 +29,7 @@ jobs:
         uses: pypa/cibuildwheel@v2.22
         env:
           CIBW_BUILD: cp310-* cp311-* cp312-* cp313-* cp314-*
-          CIBW_SKIP: pp*
+          CIBW_SKIP: pp* *-win32
           CIBW_BEFORE_BUILD_MACOS: brew install libomp
           CIBW_ARCHS_MACOS: native
           CIBW_ENVIRONMENT_MACOS: MACOSX_DEPLOYMENT_TARGET=${{ matrix.macos_deployment_target }}
