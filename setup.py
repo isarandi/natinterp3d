@@ -10,10 +10,13 @@ if sys.platform == "win32":
     extra_link_args = []
     libraries = []
 elif sys.platform == "darwin":
+    import subprocess
+    brew_prefix = subprocess.check_output(["brew", "--prefix", "libomp"], text=True).strip()
     extra_compile_args = ["-std=c11", "-O3", "-Wall", "-Wextra", "-Wno-unused-parameter",
                           "-fno-math-errno", "-flto",
-                          "-Xpreprocessor", "-fopenmp"]
-    extra_link_args = ["-lomp", "-flto"]
+                          "-Xpreprocessor", "-fopenmp",
+                          f"-I{brew_prefix}/include"]
+    extra_link_args = [f"-L{brew_prefix}/lib", "-lomp", "-flto"]
     libraries = ["m"]
 else:
     extra_compile_args = ["-std=c11", "-O3", "-Wall", "-Wextra", "-Wno-unused-parameter",
