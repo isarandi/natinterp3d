@@ -1,12 +1,18 @@
+"""Sphinx configuration for natinterp3d documentation."""
+
+import types
 import contextlib
 import importlib
 import inspect
 import os
 import re
 import sys
+from enum import Enum
 
+import setuptools_scm
 import toml
 
+# Add the project root to the path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'src')))
 
 # Read project info from pyproject.toml
@@ -20,12 +26,14 @@ project_slug = project_info['name'].replace(' ', '-').lower()
 tool_urls = project_info.get('urls', {})
 
 repo_url = tool_urls.get('Repository', '')
+author_url = tool_urls.get('Author', '')
 
+# Extract GitHub username from repo URL
 github_match = re.match(r'https://github\.com/([^/]+)/?', repo_url)
 github_username = github_match[1] if github_match else ''
 
 project = project_info['name']
-release = project_info['version']
+release = setuptools_scm.get_version('..')
 version = '.'.join(release.split('.')[:2])
 main_module_name = project_slug.replace('-', '_')
 repo_name = project_slug
@@ -65,6 +73,7 @@ intersphinx_mapping = {
     'scipy': ('https://docs.scipy.org/doc/scipy/', None),
 }
 
+github_username = github_username
 github_repository = repo_name
 autodoc_show_sourcelink = False
 html_show_sourcelink = False
@@ -89,6 +98,11 @@ html_theme_options = {
 }
 html_static_path = ['_static']
 html_css_files = ['styles/my_theme.css']
+
+html_context = {
+    'author_url': author_url,
+    'author': author,
+}
 
 # -- AutoAPI configuration ---------------------------------------------------
 
@@ -128,6 +142,7 @@ def autodoc_skip_member(app, what, name, obj, skip, options):
     if not getattr(obj, 'docstring', None):
         return True
     elif what in ('class', 'function', 'attribute'):
+        # Check if the module of the class has a docstring
         module_name = '.'.join(name.split('.')[:-1])
         try:
             module = importlib.import_module(module_name)
@@ -154,12 +169,42 @@ def get_line_numbers(obj):
     if isinstance(obj, property):
         obj = obj.fget
 
+    if isinstance(obj, Enum):
+        return get_enum_member_line_numbers(obj)
+
+    if inspect.ismemberdescriptor(obj):
+        return get_member_line_numbers(obj)
+
     with module_restored(obj):
         lines = inspect.getsourcelines(obj)
         file = inspect.getsourcefile(obj)
 
     start, end = lines[1], lines[1] + len(lines[0]) - 1
     return file, start, end
+
+
+def get_enum_member_line_numbers(obj):
+    class_ = obj.__class__
+    with module_restored(class_):
+        source_lines, start_line = inspect.getsourcelines(class_)
+
+        for i, line in enumerate(source_lines):
+            if f'{obj.name} =' in line:
+                return inspect.getsourcefile(class_), start_line + i, start_line + i
+        else:
+            raise ValueError(f'Enum member {obj.name} not found in {class_}')
+
+
+def get_member_line_numbers(obj: types.MemberDescriptorType):
+    class_ = obj.__objclass__
+    with module_restored(class_):
+        source_lines, start_line = inspect.getsourcelines(class_)
+
+        for i, line in enumerate(source_lines):
+            if f'{obj.__name__} = ' in line:
+                return inspect.getsourcefile(class_), start_line + i, start_line + i
+        else:
+            raise ValueError(f'Member {obj.__name__} not found in {class_}')
 
 
 @contextlib.contextmanager

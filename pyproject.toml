@@ -1,15 +1,16 @@
 [build-system]
 requires = [
-    "setuptools>=42",
+    "setuptools>=64",
     "wheel",
-    "cython>=0.27.3",
     "numpy",
+    "cython>=3.0.0",
+    "setuptools_scm>=8",
 ]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "natinterp3d"
-version = "0.2.1"
+dynamic = ["version"]
 description = "Natural Neighbor Interpolation in 3D"
 authors = [
     { name = "István Sárándi", email = "istvan.sarandi@uni-tuebingen.de" }
@@ -17,13 +18,80 @@ authors = [
 readme = "README.md"
 requires-python = ">=3.8"
 license = { file = "LICENSE" }
+
+keywords = [
+    "natural-neighbor",
+    "sibson",
+    "interpolation",
+    "3d",
+    "scattered-data",
+    "delaunay",
+    "voronoi",
+    "scientific-computing",
+    "cython",
+]
+
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: C",
+    "Programming Language :: Cython",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Topic :: Scientific/Engineering",
+]
+
 dependencies = [
     "numpy",
-    "scipy"
+    "scipy",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=7.0",
+    "pytest-cov",
+]
+lint = [
+    "ruff",
+    "pre-commit",
+]
+docs = [
+    "sphinx",
+    "pydata-sphinx-theme",
+    "sphinx-autoapi",
+    "sphinx-autobuild",
+    "sphinx-autodoc-typehints",
+    "sphinx-codeautolink",
+    "sphinxcontrib-bibtex",
+    "setuptools-scm",
+    "toml",
+]
+dev = [
+    "natinterp3d[test,lint,docs]",
 ]
 
 [project.urls]
+Homepage = "https://github.com/isarandi/natinterp3d"
 Repository = "https://github.com/isarandi/natinterp3d"
+Documentation = "https://natinterp3d.readthedocs.io/"
+Issues = "https://github.com/isarandi/natinterp3d/issues"
+Changelog = "https://github.com/isarandi/natinterp3d/releases"
+Author = "https://istvansarandi.com"
+
+[tool.setuptools_scm]
+version_scheme = "guess-next-dev"
+local_scheme = "no-local-version"
+version_file = "src/natinterp3d/_version.py"
 
 [tool.setuptools]
 package-dir = { "" = "src" }
@@ -31,11 +99,23 @@ package-dir = { "" = "src" }
 [tool.setuptools.packages.find]
 where = ["src"]
 
-[tool.ruff]
-line-length = 99
-
-[tool.ruff.format]
-quote-style = "single"
+[tool.cibuildwheel]
+test-requires = ["pytest", "numpy", "scipy"]
+test-command = "pytest {project}/tests/test_smoke.py -v"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+
+[tool.ruff]
+line-length = 99
+target-version = "py38"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+ignore = ["E501"]
+
+[tool.ruff.format]
+quote-style = "single"
+indent-style = "space"
