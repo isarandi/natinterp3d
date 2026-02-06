@@ -45,6 +45,9 @@ void kd_free(struct kdtree *tree);
 void kd_clear(struct kdtree *tree);
 
 
+/* Pre-allocate n nodes in a contiguous pool for cache-friendly access */
+void kd_preallocate(struct kdtree *tree, int n);
+
 /* insert a node, specifying its position, and optional data */
 int kd_insert(struct kdtree *tree, const double *pos, int data);
 int kd_insertf(struct kdtree *tree, const float *pos, int data);
@@ -116,6 +119,8 @@ int kd_res_item3f(struct kdres *set, float *x, float *y, float *z);
 /* equivalent to kd_res_item(set, 0) */
 int kd_res_item_data(struct kdres *set);
 
+/* Find the nearest node and return its data directly, with no heap allocation. */
+int kd_nearest3_data(struct kdtree *tree, double x, double y, double z);
 
 #ifdef __cplusplus
 }

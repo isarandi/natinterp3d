@@ -13,16 +13,22 @@ The natural neighbors of a query point are those vertices which, if we were to a
 have Voronoi cells sharing a face with the query point's Voronoi cell.
 The weights are proportional to the volume "stolen" from the neighbor's Voronoi cell upon the query point's insertion. 
 
-This package uses Cython to wrap my modified version of Ross Hemsley's [interpolate3d](https://code.google.com/archive/p/interpolate3d/).
-The modifications are:
+The Delaunay tetrahedralization is built on Ross Hemsley's [interpolate3d](https://code.google.com/archive/p/interpolate3d/) (incremental Bowyer-Watson insertion with flip-based convexity repair and Shewchuk's robust geometric predicates).
 
-* parallelization via OpenMP
-* option to extract the natural neighbor weights (Sibson coordinates) directly (the original version only gives the final interpolated value, but not the weights)
-* k-d tree for faster search for the containing simplex of an inserted point
+The interpolation itself is a from-scratch insertion-free algorithm: instead of inserting each query point into the mesh and removing it (as in Hemsley's original), it finds the Bowyer-Watson cavity via read-only BFS on the existing mesh and computes the stolen Voronoi volumes geometrically from circumcenters. This means the mesh is never modified during queries, so a single shared mesh serves all threads.
+
+Other changes from the original:
+
+* OpenMP parallelization with a single shared mesh (no per-thread mesh copies)
+* Morton-order (Z-order) spatial sorting of query points for cache locality
+* Contiguous packed simplex array for cache-friendly BFS traversal
+* k-d tree for fast initial simplex location
+* Sibson coordinates (weights) returned directly as a sparse matrix
 
 ## Installation
 
 natinterp3d is available on PyPI:
+
 
 ```
 pip install natinterp3d

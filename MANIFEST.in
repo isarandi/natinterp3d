@@ -1,2 +1,3 @@
-include natinterp3d/*.h
-include natinterp3d/*.c
+include src/natinterp3d/*.h
+include src/natinterp3d/*.c
+include src/natinterp3d/*.pyx

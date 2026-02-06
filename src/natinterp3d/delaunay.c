@@ -5,8 +5,8 @@
 *
 * This file implements Delaunay meshing in 3D, using the edge flipping
 * algorithm. To stop degenerecies arising from floating point errors, we use
-* the geometical predicates provided in predicates.c - giving adaptive 
-* floating point arithmetic. We also remove degenerecies present in data 
+* the geometical predicates provided in predicates.c - giving adaptive
+* floating point arithmetic. We also remove degenerecies present in data
 * caused by points which are coplanar, or cospherical. These points are removed
 * by gradually adding random peterbations until the degenerecies are removed.
 *
@@ -17,7 +17,7 @@
 *
 * The executible created can be run to create a set of random points, which are
 * then meshed and checked for Delaunayness.
-* 
+*
 *******************************************************************************/
 
 #include <stdio.h>
@@ -30,6 +30,12 @@
 #include "utils.h"
 #include "delaunay.h"
 #include "predicates.c"
+
+// Forward declarations for static inline functions
+static inline void getFaceVerticies(simplex *s, int i, vertex **p1, vertex **p2,
+                                    vertex **p3, vertex **p4);
+static inline void getFaceVerticies3(simplex *s, int i, vertex **p1, vertex **p2,
+                                     vertex **p3);
 
 /******************************************************************************/
 
@@ -59,14 +65,11 @@
 
 #ifdef DEBUG
 int SIMPLEX_MALLOC = 0;
-int VORONOI_MALLOC = 0;
 int VERTEX_MALLOC  = 0;
-int COPLANAR_DEGENERECIES = 0;
-int COSPHERICAL_DEGENERECIES = 0;
 #endif
 /******************************************************************************/
-#define MAX(x, y)  x<y ? y : x
-#define MIN(x, y)  x>y ? y : x
+#define MAX(x, y)  ((x) < (y) ? (y) : (x))
+#define MIN(x, y)  ((x) > (y) ? (y) : (x))
 #define SWAP(x, y)                                                              \
 {                                                                              \
   double tmp;                                                                  \
@@ -93,18 +96,16 @@ simplex *newSimplex(mesh *m) {
     s->s[1] = 0;
     s->s[2] = 0;
     s->s[3] = 0;
+    s->mark = 0;
 
     return s;
 }
 
 /******************************************************************************/
-// This will take a list of points, and a mesh struct, and create a 
+// This will take a list of points, and a mesh struct, and create a
 // Delaunay Tetrahedralisation.
 
 void buildMesh(vertex *ps, int n, mesh *m) {
-    // Seed the random function, we will use the random function to remove
-    // any degenerecies as we find them.
-    srand(time(NULL));
 
     // We have no degenerecies to start with.
     m->coplanar_degenerecies = 0;
@@ -116,7 +117,7 @@ void buildMesh(vertex *ps, int n, mesh *m) {
     initSuperSimplex(ps, n, m);
     addSimplexToMesh(m, m->super);
     int i, j;
-    // Add each point to the mesh 1-by-1 using the Edge Flipping technique.
+    // Add each point to the mesh 1-by-1 using Bowyer-Watson cavity insertion.
     for (i = 0; i < n; i++) {
         addPoint(&ps[i], m);
 
@@ -142,6 +143,7 @@ void buildMesh(vertex *ps, int n, mesh *m) {
     m->owns_kd = true;
     listNode *iter = topOfLinkedList(m->tets);
     int numsimpl =  getNumSimplicies(m);
+    kd_preallocate(m->kd, numsimpl);
     m->simplicies_kd = malloc(sizeof(simplex*) * numsimpl);
 
     simplex *s;
@@ -188,22 +190,20 @@ simplex **swapSimplexNeighbour(simplex *s, simplex *old, simplex *new) {
     // If this neighbour is on the exterior, we don't need to do anything.
     if (!s) { return NULL; }
 
-    int i, found = 0;
+    int i;
 
     // We are going to go through each of the elements children to see which one
     // points to the old simplex. When we find that value, we are going to swap
     // it for the new simplex value.
     for (i = 0; i < 4; i++) {
         if (s->s[i] == old) {
-            found = 1;
-            break;
+            s->s[i] = new;
+            return &s->s[i];
         }
     }
 
-    s->s[i] = new;
-
-    assert(found);
-    return &s->s[i];
+    assert(0 && "swapSimplexNeighbour: old not found");
+    return NULL;
 }
 
 /******************************************************************************/
@@ -290,9 +290,9 @@ int delaunayTest(mesh *m, vertex *ps, int n) {
 }
 
 /******************************************************************************/
-// This function is purely to test whether the set of neighbours of each 
+// This function is purely to test whether the set of neighbours of each
 // simplex is correct - If it is not reliable, then the program behaviour will
-// be undeterministic: potentially giving a very difficult bug. 
+// be undeterministic: potentially giving a very difficult bug.
 // We only need to run this test when the code is modified.
 
 void faceTest(mesh *m) {
@@ -331,7 +331,6 @@ void faceTest(mesh *m) {
             // This could be an outer-face: in which case, there is no neighbour here.
             if (neighbour != NULL) {
                 int x, found = 0;
-                //assert(!s->s[j]->dead);
 
                 // Go through each neighbour and see if it points to us.
                 // if it does (which it should) check the points match.
@@ -391,25 +390,19 @@ simplex *findContainingSimplex(mesh *m, vertex *p) {
         listNode *iter = topOfLinkedList(m->tets);
         s = nextElement(m->tets, &iter);
     } else {
-        struct kdres *res = kd_nearest3(m->kd, p->v[0], p->v[1], p->v[2]);
-        int kd_id = kd_res_item_data(res);
-        kd_res_free(res);
-
+        int kd_id = kd_nearest3_data(m->kd, p->v[0], p->v[1], p->v[2]);
         s = m->simplicies_kd[kd_id];
     }
     vertex *v1, *v2, *v3;
 
     for (int i = 0; i < 4; i++) {
-        // get the orientation of this face.
         getFaceVerticies3(s, i, &v1, &v2, &v3);
-        if (s->s[i] && orient3dfast(v1->v, v2->v, v3->v, p->v) < 0) {
-            // orientation test failed, the seeked point is towards the ith neighbor
-            // we have this neighbor, start again from i=0 (the i++ will increment it, hence i=-1)
+        if (orient3dfast(v1->v, v2->v, v3->v, p->v) < 0) {
+            if (!s->s[i]) return NULL; // point is outside the mesh
             s = s->s[i];
             i = -1;
         }
     }
-    // All the orientation tests passed: the point lies within/on the simplex.
     return s;
 }
 
@@ -418,8 +411,8 @@ simplex *findContainingSimplex(mesh *m, vertex *p) {
 // This function aims to help us ensure consistant orientation.
 // The last value is that of the remaining vertex which is left over.
 
-void getFaceVerticies(simplex *s, int i, vertex **p1, vertex **p2,
-                      vertex **p3, vertex **p4) {
+static inline void getFaceVerticies(simplex *s, int i, vertex **p1, vertex **p2,
+                                    vertex **p3, vertex **p4) {
     switch (i) {
         case 0:
             *p1 = s->p[0];
@@ -448,7 +441,7 @@ void getFaceVerticies(simplex *s, int i, vertex **p1, vertex **p2,
     }
 }
 
-void getFaceVerticies3(simplex *s, int i, vertex **p1, vertex **p2, vertex **p3) {
+static inline void getFaceVerticies3(simplex *s, int i, vertex **p1, vertex **p2, vertex **p3) {
     switch (i) {
         case 0:
             *p1 = s->p[0];
@@ -476,20 +469,10 @@ void getFaceVerticies3(simplex *s, int i, vertex **p1, vertex **p2, vertex **p3)
 
 /******************************************************************************/
 // This routine will tell us whether or not a simplex contains a given point.
-// To perform this test robustly, we will use the code provided by
-// Jonathan Richard Shewchuk[3]. This code allows us to scale the precision 
-// of our calculations so that we can be sure of valid results whilst retaining
-// good performance in the general case.
 
 int simplexContainsPoint(simplex *s, vertex *p) {
-    // To perform this test, we check the orientation of our point against
-    // the plane defined by each triangular face of our given simplex.
-    // if the sign is always negative then the point lies within the simplex.
-
-    // The points on this face.
     vertex *p1, *p2, *p3;
     for (int i = 0; i < 4; i++) {
-        // Get the face values for this simplex.
         getFaceVerticies3(s, i, &p1, &p2, &p3);
         if (orient3dfast(p1->v, p2->v, p3->v, p->v) < 0) { return 0; }
     }
@@ -497,7 +480,7 @@ int simplexContainsPoint(simplex *s, vertex *p) {
 }
 
 /******************************************************************************/
-// Write out all the tets in the list, except for those ones connected to 
+// Write out all the tets in the list, except for those ones connected to
 // the points on S0: which we can use as the super simplex.
 
 void writeTetsToFile(mesh *m) {
@@ -539,15 +522,13 @@ void randomPerturbation(vertex *v, int attempt) {
 }
 
 /******************************************************************************/
-// This routine will return 0 if the simplex is no longer Delaunay with 
+// This routine will return 0 if the simplex is no longer Delaunay with
 // the addition of this new point, 1 if this simplex is still Delaunay
-// with the addition of this new point, and -1 if this simplex is 
+// with the addition of this new point, and -1 if this simplex is
 // degenerate with the addition of this new point (i.e. if the simplex is
 // co-spherical.)
 
 int isDelaunay(simplex *s, vertex *p) {
-    // If the orientation is incorrect, then the output will be indeterministic.
-    // #if DEBUG >= 0
     double orientation = orient3dfast(s->p[0]->v,
                                       s->p[1]->v,
                                       s->p[2]->v,
@@ -559,14 +540,11 @@ int isDelaunay(simplex *s, vertex *p) {
 
         exit(1);
     }
-//  assert(orientation != 0);
-//  assert(orientation >  0);
 
-    //#endif
     double inSph = inspherefast(s->p[0]->v,
                                 s->p[1]->v,
                                 s->p[2]->v,
-                                s->p[3]->v, p);
+                                s->p[3]->v, p->v);
 
 
     // We have a degenerecy.
@@ -586,14 +564,23 @@ void updateConflictingSimplicies(vertex *p, mesh *m) {
     simplex *s0 = findContainingSimplex(m, p);
     simplex *current;
 
+    // Increment generation for stamp-based O(1) contains check
+    m->simplex_generation++;
+    uint64_t gen = m->simplex_generation;
+
     // Go through each simplex, if it contains neighbours which are
     // not already present, which are not in the list already,
     // and which are not delaunay, we add them to the list of conflicts
-    stack *toCheck = newStack();
+    stack *toCheck = m->reusable_bfs;
+    emptyStack(toCheck);
     push(toCheck, s0);
     while (!isEmpty(toCheck)) {
         // pop the next one to check from the stack.
         current = pop(toCheck);
+
+        // Already visited this simplex in this generation
+        if (current->mark == gen) { continue; }
+
         int isDel = isDelaunay(current, p);
 
         // Check to see whether or not we have a degenerecy
@@ -603,20 +590,18 @@ void updateConflictingSimplicies(vertex *p, mesh *m) {
             while (isDel == -1) {
                 randomPerturbation(p, i);
                 isDel = isDelaunay(current, p);
-                //printf("Degenerecy removing for %p, attempt: %d\n",current,i);
                 i++;
             }
 
             // Start this function again now that we have moved the point.
-            freeStack(toCheck, NULL);
             emptyArrayList(m->conflicts);
             updateConflictingSimplicies(p, m);
             return;
         }
 
-        if ((!isDel) && (!arrayListContains(m->conflicts, current))) {
-            // add this simplex, and check its neighbours.
-
+        if (!isDel) {
+            // Stamp and add this simplex, and check its neighbours.
+            current->mark = gen;
             addToArrayList(m->conflicts, current);
             for (i = 0; i < 4; i++) {
                 if (current->s[i]) {
@@ -626,42 +611,30 @@ void updateConflictingSimplicies(vertex *p, mesh *m) {
         }
 
     }
-    freeStack(toCheck, NULL);
 }
 
 /******************************************************************************/
 // Add a point by using the edge flipping algorithm.
 
 void addPoint(vertex *p, mesh *m) {
-    // If the list arguments are NULL, then we create local lists.
-    // Otherwise, we return the list of updates we did.
-    // This is so that we can easily perform point removal.
-
     // This will set a list of conflicting non-Delaunay simplicies in the mesh
     // structure.
     updateConflictingSimplicies(p, m);
 
     // We now have a list of simplicies which contain the point p within
     // their circum-sphere.
-    // We now want to create a new tetrahedralisation in the polytope formed
-    // by removing the old simplicies.
-    // We know which faces we should connect to our point, by deleting every
-    // face which is shared by another conflicting simplex.
-    //print arrayListSize(m->conflicts);
+    uint64_t gen = m->simplex_generation;
     int i, j;
     for (j = 0; j < arrayListSize(m->conflicts); j++) {
         simplex *s = getFromArrayList(m->conflicts, j);
 
-        // Now go through each face, if it is not shared by any other face
-        // on the stack, we will create a new simplex which is joined to
-        // our point.
         for (i = 0; i < 4; i++) {
             vertex *v1, *v2, *v3;
             getFaceVerticies3(s, i, &v1, &v2, &v3);
 
             // Now, check to see whether or not this face is shared with any
-            // other simplicies in the list.
-            if (!arrayListContains(m->conflicts, s->s[i])) {
+            // other simplicies in the list (use stamp check).
+            if (s->s[i] == NULL || s->s[i]->mark != gen) {
                 // We will create a new simplex connecting this face to our point.
                 simplex *new = newSimplex(m);
                 new->p[0] = v1;
@@ -680,7 +653,7 @@ void addPoint(vertex *p, mesh *m) {
                         attempt++;
                     }
                     // We are going to have to start adding this point again.
-                    // That means removing all changes we have done so far.
+                    push(m->deadSimplicies, new);
                     undoNeighbourUpdates(m->neighbourUpdates);
                     int k;
                     for (k = 0; k < arrayListSize(m->updates); k++) {
@@ -689,22 +662,15 @@ void addPoint(vertex *p, mesh *m) {
                     }
                     emptyArrayList(m->updates);
                     emptyArrayList(m->conflicts);
-                    // Start adding this point again, now that we have
-                    // (hopefully) removed the coplanar dependencies.
                     addPoint(p, m);
                     return;
                 }
-                // We know that every successful face will be pointing
-                // outwards from the point. We can therefore directly set the neighbour
-                // to be the same as the one that was with this face before.
                 new->s[0] = s->s[i];
 
                 // update, storing each neighbour pointer change we make.
                 simplex **update = swapSimplexNeighbour(s->s[i], s, new);
                 pushNeighbourUpdate(m->neighbourUpdates, update, s);
 
-                // This is a list of all the new tets created whilst adding
-                // this point.
                 addToArrayList(m->updates, new);
                 addSimplexToMesh(m, new);
             }
@@ -712,7 +678,7 @@ void addPoint(vertex *p, mesh *m) {
     }
 
     // Connect up the internal neighbours of all our new simplicies.
-    setNeighbours(m->updates);
+    setNeighbours(m->updates, m);
 
     // Remove the conflicting simplicies.
     for (i = 0; i < arrayListSize(m->conflicts); i++) {
@@ -722,53 +688,65 @@ void addPoint(vertex *p, mesh *m) {
 }
 
 /******************************************************************************/
-// Slightly quick and dirty way to connect up all the neighbours of the 
-// new simplicies.
+// Connect internal neighbours of new simplices using edge sorting (O(k log k)).
 
-void setNeighbours(arrayList *newTets) {
-    simplex *s, *s2;
-    vertex *v1, *v2, *v3, *t1, *t2, *t3, *tmp;
-    // Go through each new simplex.
-    int j;
+typedef struct {
+    uintptr_t v_lo, v_hi;
+    simplex *s;
+    int slot;
+} edge_entry;
 
-    for (j = 0; j < arrayListSize(newTets); j++) {
-        s = getFromArrayList(newTets, j);
+static int edge_compare(const void *a, const void *b) {
+    const edge_entry *ea = (const edge_entry *)a;
+    const edge_entry *eb = (const edge_entry *)b;
+    if (ea->v_lo != eb->v_lo) return (ea->v_lo < eb->v_lo) ? -1 : 1;
+    if (ea->v_hi != eb->v_hi) return (ea->v_hi < eb->v_hi) ? -1 : 1;
+    return 0;
+}
 
-        // These are the verticies on the 2-simplex pointing outwards from
-        // the current point.
-        v1 = s->p[0];
-        v2 = s->p[1];
-        v3 = s->p[2];
+void setNeighbours(arrayList *newTets, mesh *m) {
+    int k = arrayListSize(newTets);
+    int nEntries = 3 * k;
+    /* Reuse mesh-owned edge buffer to avoid malloc/free per insertion */
+    if (nEntries > m->edge_buf_cap) {
+        m->edge_buf_cap = nEntries * 2;
+        free(m->edge_buf);
+        m->edge_buf = malloc(m->edge_buf_cap * sizeof(edge_entry));
+    }
+    edge_entry *entries = (edge_entry *)m->edge_buf;
 
-        // We need to find neighbours for the edges (v1,v2) (v2,v3) (v3,v1)
-        // We will do this by going through every other simplex in the list,
-        // and checking to see if its outward pointing face shares any of these
-        // pairs. If it does, then we connect up the neighbours.
-
-        int k;
-        for (k = 0; k < arrayListSize(newTets); k++) {
-            s2 = getFromArrayList(newTets, k);
-            if (s == s2) { continue; }
-            int i;
-            // NOTE: we don't consider the outside face.
-            // We want to know which side the neighbours are on.
-            for (i = 1; i < 4; i++) {
-                getFaceVerticies(s2, i, &t1, &t2, &t3, &tmp);
-                // We now want to see if any of the edges (v1,v2) (v2,v3) (v3,v1) are
-                // on this triangle:
-                if ((v1 == t1 || v1 == t2 || v1 == t3) &&
-                    (v2 == t1 || v2 == t2 || v2 == t3)) {
-                    s->s[1] = s2;
-                } else if ((v2 == t1 || v2 == t2 || v2 == t3) &&
-                           (v3 == t1 || v3 == t2 || v3 == t3)) {
-                    s->s[3] = s2;
-                } else if ((v3 == t1 || v3 == t2 || v3 == t3) &&
-                           (v1 == t1 || v1 == t2 || v1 == t3)) {
-                    s->s[2] = s2;
-                }
-            }
+    for (int j = 0; j < k; j++) {
+        simplex *s = getFromArrayList(newTets, j);
+        // Outer face vertices: p[0], p[1], p[2]. p[3] is new point.
+        // Edge (p[0],p[1]) -> slot 1
+        // Edge (p[2],p[0]) -> slot 2
+        // Edge (p[1],p[2]) -> slot 3
+        vertex *pairs[3][2] = {
+            {s->p[0], s->p[1]},
+            {s->p[2], s->p[0]},
+            {s->p[1], s->p[2]}
+        };
+        int slots[3] = {1, 2, 3};
+        for (int e = 0; e < 3; e++) {
+            uintptr_t a = (uintptr_t)pairs[e][0];
+            uintptr_t b = (uintptr_t)pairs[e][1];
+            entries[3*j + e].v_lo = a < b ? a : b;
+            entries[3*j + e].v_hi = a < b ? b : a;
+            entries[3*j + e].s = s;
+            entries[3*j + e].slot = slots[e];
         }
     }
+
+    qsort(entries, nEntries, sizeof(edge_entry), edge_compare);
+
+    // Adjacent matching pairs share an edge; connect them bidirectionally.
+    for (int i = 0; i < nEntries - 1; i++) {
+        if (entries[i].v_lo == entries[i+1].v_lo && entries[i].v_hi == entries[i+1].v_hi) {
+            entries[i].s->s[entries[i].slot] = entries[i+1].s;
+            entries[i+1].s->s[entries[i+1].slot] = entries[i].s;
+        }
+    }
+
 }
 
 /******************************************************************************/
@@ -791,9 +769,7 @@ void printEdge(vertex *v1, vertex *v2, FILE *stream) {
 }
 
 /******************************************************************************/
-// Does this simplex have the point p? - notice that we are comparing pointersa
-// and not coordinates: so that duplicate coordinates will evaluate to not 
-// equal.
+// Does this simplex have the point p?
 
 int pointOnSimplex(vertex *p, simplex *s) {
     if (!s) { return 0; }
@@ -807,7 +783,7 @@ int pointOnSimplex(vertex *p, simplex *s) {
 
 /******************************************************************************/
 // This routine tell us the neighbour of a simplex which is _not_ connected
-// to the given point. 
+// to the given point.
 
 simplex *findNeighbour(simplex *s, vertex *p) {
     vertex *t1, *t2, *t3, *t4;
@@ -827,9 +803,6 @@ simplex *findNeighbour(simplex *s, vertex *p) {
 }
 
 /******************************************************************************/
-// Check to see if the two simplicies sharing face v1, v2, v3 with top point
-// t, and bottom point b are convex: i.e. can we draw a line between t and b
-// which passes through the 2-simplex v1,v2,v3.
 
 int isConvex(vertex *v1, vertex *v2, vertex *v3, vertex *t, vertex *b) {
     int i = 0;
@@ -841,501 +814,6 @@ int isConvex(vertex *v1, vertex *v2, vertex *v3, vertex *t, vertex *b) {
 }
 
 /******************************************************************************/
-// This will return an arrayList of verticies which are the Natural
-// Neighbours of a point. This is currently not used, and is slow.
-
-arrayList *naturalNeighbours(vertex *v, mesh *m) {
-    simplex *s;
-    // User is responsible for freeing this structure.
-    arrayList *l = newArrayList();
-    listNode *iter = topOfLinkedList(m->tets);
-
-    int i;
-    while ((s = nextElement(m->tets, &iter))) {
-        if (pointOnSimplex(v, s)) {
-            for (i = 0; i < 4; i++) {
-                if ((s->p[i] != v) && (!pointOnSimplex(s->p[i], m->super))
-                    && (!arrayListContains(l, s->p[i]))) {
-                    addToArrayList(l, s->p[i]);
-                }
-            }
-        }
-    }
-
-    return l;
-}
-
-/******************************************************************************/
-// Given a point and a list of simplicies, we want to find any valid 
-// neighbour of this point.
-
-simplex *findAnyNeighbour(vertex *v, arrayList *tets) {
-    int i;
-
-    for (i = 0; i < arrayListSize(tets); i++) {
-        simplex *s = getFromArrayList(tets, i);
-        if (pointOnSimplex(v, s)) { return s; }
-    }
-    return NULL;
-}
-
-/******************************************************************************/
-// This function will find the neighbours of a given point.
-// given a simplex and at least one neighbour.
-// This is much more efficient than the previous Natural Neighobour method, 
-// because we take a local simplex and then check the neighbourhood for 
-// matching simplicies.
-
-arrayList *findNeighbours(vertex *v, simplex *s) {
-    int i;
-    arrayList *l = newArrayList();
-    stack *toCheck = newStack();
-
-    simplex *current;
-    push(toCheck, s);
-
-    while (!isEmpty(toCheck)) {
-        // pop the next one to check from the stack.
-        current = pop(toCheck);
-
-        // We try to chose the things most likely to fail first, to take
-        // advantage of lazy evaluation.
-        if (pointOnSimplex(v, current) && (!arrayListContains(l, current))) {
-            // add this simplex, and check its neighbours.
-            addToArrayList(l, current);
-            for (i = 0; i < 4; i++) {
-                if (current->s[i]) {
-                    push(toCheck, current->s[i]);
-                }
-            }
-        }
-    }
-    freeStack(toCheck, NULL);
-
-    return l;
-}
-
-/******************************************************************************/
-// Given a simplex, we want to find the correctly oriented verticies which are
-// not connected
-
-void getRemainingFace(simplex *s, vertex *p, vertex **v1,
-                      vertex **v2,
-                      vertex **v3) {
-    int i, found = 0;
-    vertex *tmp;
-    for (i = 0; i < 4; i++) {
-        getFaceVerticies(s, i, v1, v2, v3, &tmp);
-        if (tmp == p) {
-            found = 1;
-            break;
-        }
-    }
-    // Make sure that we found the point.
-    assert(found);
-}
-
-
-/******************************************************************************/
-
-int isNeighbour(simplex *s0, simplex *s1) {
-    int i;
-    for (i = 0; i < 4; i++) {
-        if (s0->s[i] == s1) { return 1; }
-    }
-
-    return 0;
-}
-
-/******************************************************************************/
-
-voronoiCell *newVoronoiCell(mesh *m, int n) {
-
-    voronoiCell *vc;
-    vc = pop(m->deadVoronoiCells);
-
-    if (!vc) {
-        vc = malloc(sizeof(voronoiCell));
-        vc->verticies = newArrayList();
-        vc->nallocated = 0;
-        vc->points = 0;
-#ifdef DEBUG
-        VORONOI_MALLOC ++;
-#endif
-    } else {
-        emptyArrayList(vc->verticies);
-    }
-
-    // Allocate memory for the point list.
-    // We do a realloc, because we want to expand the array to the required size,
-    // and then not have to do any more alloc's later. - This is basically
-    // a memory pooling technique.
-    if (n > vc->nallocated) {
-        vc->points = realloc(vc->points, sizeof(double) * n);
-
-        int i;
-        for (i = vc->nallocated; i < n; i++) {
-#ifdef DEBUG
-            VERTEX_MALLOC++;
-#endif
-            vc->points[i] = malloc(sizeof(double) * 3);
-        }
-        vc->nallocated = n;
-    }
-    vc->n = n;
-    return vc;
-}
-
-/******************************************************************************/
-
-void addVertexToVoronoiCell(voronoiCell *vc, double *v) {
-    addToArrayList(vc->verticies, v);
-}
-
-/******************************************************************************/
-// We use a NULL pointer as a seperator between different faces.
-
-void startNewVoronoiFace(voronoiCell *vc) {
-    addToArrayList(vc->verticies, NULL);
-}
-
-/******************************************************************************/
-// Given a list of conflicts from the last insert, a list of updates
-// from the last insert, and the mesh. We can 'roll-back' the mesh to its
-// previous state.
-
-void removePoint(mesh *m) {
-    int i;
-    simplex *s;
-
-    for (i = 0; i < arrayListSize(m->conflicts); i++) {
-        s = getFromArrayList(m->conflicts, i);
-        addSimplexToMesh(m, s);
-    }
-
-    undoNeighbourUpdates(m->neighbourUpdates);
-
-    for (i = 0; i < arrayListSize(m->updates); i++) {
-        s = getFromArrayList(m->updates, i);
-        removeSimplexFromMesh(m, s);
-    }
-}
-
-/******************************************************************************/
-// This will take a voronoi cell and calculate the volume.
-// the point p is the point which the voronoi cell is defined about.
-
-double voronoiCellVolume(voronoiCell *vc, vertex *p) {
-    int i, j;
-    double volume = 0;
-
-    for (i = 0; i < arrayListSize(vc->verticies); i++) {
-        double *thisV;
-        double *firstV;
-        double *lastV = NULL;
-
-        // Calculate the center point of this face.
-        double center[3] = {0, 0, 0};
-
-        // Find the center point of this vertex.
-        for (j = i; j < arrayListSize(vc->verticies); j++) {
-            thisV = getFromArrayList(vc->verticies, j);
-
-            // We have reached the next face.
-            if (!thisV) { break; }
-            vertexAdd(thisV, center, center);
-        }
-
-        // This will give us the center point of the face.
-        vertexByScalar(center, 1 / (double) (j - i), center);
-
-        // First vertex on the face.
-        firstV = getFromArrayList(vc->verticies, i);
-        lastV = NULL;
-
-        for (j = i; j < arrayListSize(vc->verticies); j++) {
-            // Get the current vertex from the face.
-            thisV = getFromArrayList(vc->verticies, j);
-
-            // We've reached the end of this face.
-            if (thisV == NULL) {
-                i = j;
-                break;
-            }
-            // If we have two points to join up, add the volume.
-            if (lastV) {
-                volume += volumeOfTetrahedron(thisV, lastV, p->v, center);
-            } else {
-                firstV = thisV;
-            }
-            lastV = thisV;
-        }
-        // Add the first segment.
-        volume += volumeOfTetrahedron(lastV, firstV, p->v, center);
-    }
-
-    assert(volume > 0);
-
-    return volume;
-
-}
-
-/******************************************************************************/
-// a different function for getting Voronoi Cells - actually slower than
-// original, so has been removed. In theory does less computation, but has
-// bigger overheads for dealing with memory etc.
-
-voronoiCell *getVoronoiCell2(vertex *point, simplex *s0, mesh *m) {
-    arrayList *neighbours = findNeighbours(point, s0);
-    int n = arrayListSize(neighbours);
-
-    int i, j, k;
-
-    // Alloc the memory for our new cell.
-    voronoiCell *vc = newVoronoiCell(m, n);
-
-    // Set all the points to be used in this Voronoi cell.
-    // We do this by going through all n neighbouring simplicies, and calculating
-    // their circum centers.
-    for (i = 0; i < n; i++) {
-        circumCenter((simplex *) getFromArrayList(neighbours, i), vc->points[i]);
-    }
-
-    /* The following two lists must be updated atomically */
-
-    // This is the list of incident edges.
-    arrayList *incidentEdges = newArrayList();
-
-    // This is a list of lists of the simplicies attached to those incident edges.
-    arrayList *incidentSimplexLists = newArrayList();
-
-    // This will extract every edge from the neighoburing simplicies.
-    for (i = 0; i < arrayListSize(neighbours); i++) {
-        // get this simplex.
-        int sIndex = i;
-        simplex *s = getFromArrayList(neighbours, i);
-
-        // Go through every point on this simplex. We ignore one of these: which is
-        // the point we are interpolating.
-        for (j = 0; j < 4; j++) {
-            // The vertex we are considering on the simplex.
-            vertex *thisVertex = s->p[j];
-
-            // If this is the point we are interpolating, ignore it.
-            if (thisVertex == point) { continue; }
-
-            int index = arrayListGetIndex(incidentEdges, thisVertex);
-            // This edge is already in the list of incident edges.
-            if (index != -1) {
-                // We the simplex incident to this edge to index'th list
-                // contained within the list incidentSimplicies
-                arrayList *thisList = getFromArrayList(incidentSimplexLists, index);
-                int *thisInt = malloc(sizeof(int));
-                *thisInt = sIndex;
-                addToArrayList(thisList, thisInt);
-                // This edge has not yet been added.
-            } else {
-
-                // This edge has not been seen yet, create a new entry in our
-                // edge list, and create a list to contain the simplicies which
-                // are incident to it.
-                arrayList *thisList = newArrayList();
-                int *thisInt = malloc(sizeof(int));
-                *thisInt = sIndex;
-                addToArrayList(thisList, thisInt);
-                // Note atomic adds: these must always be coherent!
-                addToArrayList(incidentEdges, thisVertex);
-                addToArrayList(incidentSimplexLists, thisList);
-            }
-        }
-    }
-    /* We now have a list of edges which are incident to the point
-       being interpolated. (these are defined by one vertex only, as we
-       know that all edges are connected to one common point). For each of these
-       entries in the edgeList, there is a list in the list incidentSimplexlists
-       which contains a list of all simplicies which are incident to that edge. */
-
-    for (i = 0; i < arrayListSize(incidentEdges); i++) {
-        // the current edge we are considering (defined by the edge which is not
-        // the point being interpolated).
-        arrayList *incidentSimplicies = getFromArrayList(incidentSimplexLists, i);
-
-        // We now want to get the list of simplicies which are incidient to this
-        // edge, with a consistant orientation, so that we can calculate
-        // the volume.
-        // To do this we are going to fetch one simplex at a time, see if it is
-        // a neighbour to the simplex we last used. if it is, we make sure it is
-        // not a neighbour that we already visited (because there are two
-        // valid neighbours for each corresponding direction).
-
-        int currentIndex = *(int *) getFromArrayList(incidentSimplicies, 0);
-        simplex *currentSimplex = getFromArrayList(neighbours, currentIndex);
-        simplex *firstSimplex = currentSimplex;
-        simplex *lastConsidered = NULL;
-
-        do {
-            for (k = 0; k < arrayListSize(incidentSimplicies); k++) {
-                int thisIndex = *(int *) getFromArrayList(incidentSimplicies, k);
-                simplex *thisSimplex = getFromArrayList(neighbours, thisIndex);
-
-                if (thisSimplex != lastConsidered &&
-                    isNeighbour(thisSimplex, currentSimplex)) {
-
-                    addVertexToVoronoiCell(vc, vc->points[thisIndex]);
-
-                    lastConsidered = currentSimplex;
-                    currentSimplex = thisSimplex;
-                    break;
-                }
-            }
-        } while (currentSimplex != firstSimplex);
-
-        startNewVoronoiFace(vc);
-    }
-
-
-    // Free all of the lists.
-    for (i = 0; i < arrayListSize(incidentEdges); i++) {
-        arrayList *thisList = getFromArrayList(incidentSimplexLists, i);
-        freeArrayList(thisList, free);
-    }
-    freeArrayList(incidentEdges, NULL);
-    freeArrayList(incidentSimplexLists, NULL);
-
-    return vc;
-}
-
-/******************************************************************************/
-// This will give us the volume of the voronoi cell about the point p.
-// We pass a point, at least one simplex containing that point, and the mesh.
-
-voronoiCell *getVoronoiCell(vertex *point, simplex *s0, mesh *m) {
-    simplex *s;
-    // Find the Natural Neighbour verticies of this point.
-    arrayList *neighbours = findNeighbours(point, s0);
-    int n = arrayListSize(neighbours);
-
-    // If no neighbours were found, it could be because we are trying to
-    // get a cell outside of the points
-    if (n == 0) {
-        return NULL;
-    }
-
-    // Create a new voronoi cell.
-    voronoiCell *vc = newVoronoiCell(m, n);
-
-    // This is the list of simplicies incident to each edge.
-    simplex *simps[n];
-
-    // An edge will always start at our given point, therefore we only need
-    // to store the second point to fully define each edge.
-    // There are going to be three edges for each simplex.
-    vertex *edges[3 * n];
-    // Since edges must contain duplicate edges, we want to know
-    // when a particular edge has been visited.
-    int i, j = 0, done[3 * n];
-
-    for (i = 0; i < arrayListSize(neighbours); i++) {
-        s = getFromArrayList(neighbours, i);
-        vertex *v1, *v2, *v3;
-        getRemainingFace(s, point, &v1, &v2, &v3);
-
-        // Add this simplex to the list note we add three points for each.
-        simps[i] = s;
-        edges[3 * i] = v1;
-        edges[3 * i + 1] = v2;
-        edges[3 * i + 2] = v3;
-
-        done[3 * i] = 0;
-        done[3 * i + 1] = 0;
-        done[3 * i + 2] = 0;
-
-        // Calculate the circumcenter of this simplex.
-        circumCenter(s, vc->points[i]);
-    }
-
-    // For every edge that is in the list, we are going to get the first simplex
-    // which is incident to it, and then draw a line from it to the next
-    // neighbour that it is incident to it. This next neighbour will be chosen
-    // because it is NOT the last one we considered.
-    // We are effectively rotating around each edge which spans from the point
-    // to one of its natural neighbours, and storing the circum-centers of
-    // the simplicies that we found.
-    for (i = 0; i < 3 * n; i++) {
-        // We don't want to recompute edges.
-        if (done[i]) { continue; }
-
-        // This is the current simplex.
-        // We are going to find a neighbour for it, which shares an edge,
-        // and is NOT equal to lastConsidered.
-        int first = i;
-        int current = i;
-        int lastConsidered = -1;
-        // Create this voronoi face.
-
-        int match;
-        do {
-            match = 0;
-            for (j = 0; j < 3 * n; j++) {
-                if (done[j]) { continue; }
-                // if (done[j]) continue;
-                // Is this edge shared?
-                // Is this simplex a neighbour of the current simplex?
-                // Are we making progress: is this a new neighbour?
-
-                if ((edges[i] == edges[j]) && j != lastConsidered
-                    && isNeighbour(simps[current / 3], simps[j / 3])) {
-                    done[j] = 1;
-                    match = 1;
-                    // Add this vertex to this face of this cell.
-                    addVertexToVoronoiCell(vc, vc->points[j / 3]);
-                    lastConsidered = current;
-                    current = j;
-                    break;
-                }
-            }
-        } while (match && (current != first));
-
-        startNewVoronoiFace(vc);
-    }
-
-    freeArrayList(neighbours, NULL);
-
-    return vc;
-}
-
-/******************************************************************************/
-
-void freeVoronoiCell(voronoiCell *vc, mesh *m) {
-    // We just push the cell to the memory pool.
-    // We can free the memory pools manually, or let the program do it
-    // automatically at the end.
-    push(m->deadVoronoiCells, vc);
-}
-
-/******************************************************************************/
-// This writes a voronoi cell to a file. This uses (-1,-1,-1) as a special
-// value to seperate faces, so: things will obviously break if there is a 
-// circum center on this value... We only really use this function for testing
-// so we allow this bug to become a "feature"!
-
-void writeVoronoiCellToFile(FILE *f, voronoiCell *vc) {
-    int i;
-    for (i = 0; i < arrayListSize(vc->verticies); i++) {
-        vertex *v = getFromArrayList(vc->verticies, i);
-
-        if (!v) {
-            fprintf(f, "-1 -1 -1\n");
-        } else {
-            fprintf(f, "%lf %lf %lf\n", v->X, v->Y, v->Z);
-        }
-    }
-}
-
-/******************************************************************************/
-// We should make sure that we only use these two functions for interacting
-// with the global simplex list, otherwise the program will behave
-// indeterministically.
 
 void addSimplexToMesh(mesh *m, simplex *s) {
     s->node = addToLinkedList(m->tets, s);
@@ -1344,8 +822,6 @@ void addSimplexToMesh(mesh *m, simplex *s) {
 /******************************************************************************/
 
 void removeSimplexFromMesh(mesh *m, simplex *s) {
-    // The simplex has a special pointer which gives its location in the mesh
-    // linked list. This allows us to easily remove it from the list.
     removeFromLinkedList(m->tets, s->node);
 }
 
@@ -1360,9 +836,6 @@ void initSuperSimplex(vertex *ps, int n, mesh *m) {
     // Get the range of our data set.
     vertex min, max, range;
     getRange(ps, n, &min, &max, &range, 1);
-
-    // Make the super simplex bigger!
-    // vertexByScalar(range.v, 4, range.v);
 
     // We will go clockwise around the base, and then do the top.
     m->superVerticies[0].X = min.X + range.X / 2;
@@ -1390,13 +863,6 @@ void initSuperSimplex(vertex *ps, int n, mesh *m) {
 }
 
 /******************************************************************************/
-// We are using two stacks, instead of a struct, because it gives us good
-// memory advantages. - We will always want about the same number of 
-// neighbour updates: using two array-based stacks means that we can always have
-// that memory allocated: we should not have to do any memory reallocation
-// for the neighbour updating.
-// We use a function, so that the process becomes atomic: we don't want 
-// to end up with the two stacks being incoherent!
 
 void pushNeighbourUpdate(neighbourUpdate *nu, simplex **ptr, simplex *old) {
     push(nu->ptrs, ptr);
@@ -1406,20 +872,17 @@ void pushNeighbourUpdate(neighbourUpdate *nu, simplex **ptr, simplex *old) {
 /******************************************************************************/
 
 void freeNeighbourUpdates(neighbourUpdate *nu) {
-    freeStack(nu->ptrs, free);
-    freeStack(nu->old, free);
+    freeStack(nu->ptrs, NULL); /* elements are interior pointers (&s->s[i]) */
+    freeStack(nu->old, NULL);  /* elements are simplex* owned elsewhere */
     free(nu);
 }
 
 /******************************************************************************/
-// We will go through, and use our neighbour update list to change the 
-// neighbour values back to their originals.
 
 void undoNeighbourUpdates(neighbourUpdate *nu) {
     simplex **thisPtr;
     simplex *thisSimplex;
 
-    // We use isEmpty, because the pointers might sometimes be NULL.
     while (!isEmpty(nu->ptrs)) {
         thisPtr = pop(nu->ptrs);
         thisSimplex = pop(nu->old);
@@ -1433,8 +896,6 @@ void undoNeighbourUpdates(neighbourUpdate *nu) {
 /******************************************************************************/
 
 void resetNeighbourUpdates(neighbourUpdate *nu) {
-    // This will empty the stacks, without freeing any memory. This is the key
-    // to this 'memory-saving hack'.
     emptyStack(nu->ptrs);
     emptyStack(nu->old);
 }
@@ -1452,70 +913,24 @@ neighbourUpdate *initNeighbourUpdates() {
 // Allocate all the strucutres required to maintain a mesh in memory.
 
 mesh *newMesh() {
-    // Create the struct to hold all of the data strucutres.
     mesh *m = malloc(sizeof(mesh));
-    // Pointer to the super simplex.
     m->super = NULL;
-    // A linked list of simplicies: We can actually remove this without losing
-    // any functionality (but it is useful for testing etc.).
     m->tets = newLinkedList();
-    // Instead of freeing old simplicies/voronoi cells, we put them on a stack
-    // and reuse them as necesary.
     m->deadSimplicies = newStack();
-    m->deadVoronoiCells = newStack();
-    // This is an array of currently conflicting simplicies.
     m->conflicts = newArrayList();
-    // This is an array of the most recently added simplicies.
     m->updates = newArrayList();
-    // This is an array describing the most recent neighbour updates performed.
     m->neighbourUpdates = initNeighbourUpdates();
 
     m->kd = NULL;
     m->owns_kd = false;
     m->simplicies_kd = NULL;
+    m->simplex_generation = 0;
+    m->packed_simplices = NULL;
+    m->num_packed = 0;
+    m->reusable_bfs = newStack();
+    m->edge_buf = NULL;
+    m->edge_buf_cap = 0;
     return m;
-}
-
-// the copied mesh has new simplices but the vertices are shared with the old one so cached volumes are kept
-// but the simplex neighborhoods change when inserting points, so they need to be copied
-mesh* copyMesh(mesh* m) {
-    mesh* newm = newMesh();
-    int numSimplicies = getNumSimplicies(m);
-    newm->simplicies_kd = malloc(sizeof(simplex*) * numSimplicies);
-
-    // copy the super simplex
-    newm->super = malloc(sizeof(simplex));
-    m->super->copy = newm->super;
-    for (int j = 0; j < 4; j++) {
-        newm->super->p[j] = m->super->p[j];
-        newm->super->s[j] = NULL; // super simplex has no neighbors
-    }
-    // iterate once, to make a copy of each simplex
-    for (int i=0; i<numSimplicies; i++) {
-        simplex* s = m->simplicies_kd[i];
-        simplex* sCopy = newSimplex(newm);
-        for (int j = 0; j < 4; j++) {
-            sCopy->p[j] = s->p[j];
-        }
-        s->copy = sCopy;
-        addSimplexToMesh(newm, sCopy);
-        newm->simplicies_kd[i] = sCopy;
-    }
-    // iterate again, to copy the neighbor pointers (to point to the copied simplices)
-    for (int i=0; i < numSimplicies; i++) {
-        simplex* s = m->simplicies_kd[i];
-        simplex* sCopy = s->copy;
-        for (int j = 0; j < 4; j++) {
-            if (s->s[j]) {
-                sCopy->s[j] = s->s[j]->copy;
-            } else {
-                sCopy->s[j] = NULL;
-            }
-        }
-    }
-    newm->kd = m->kd;
-    newm->owns_kd = false;
-    return newm;
 }
 
 /******************************************************************************/
@@ -1524,26 +939,16 @@ void freeMesh(mesh *m) {
 #ifdef DEBUG
     printf("Mallocs for vertex: %d.\n", VERTEX_MALLOC);
     printf("Mallocs for simplex: %d.\n", SIMPLEX_MALLOC);
-    printf("Mallocs for voronoi: %d.\n", VORONOI_MALLOC);
 #endif
 
-    free(m->super);
+    /* m->super is in deadSimplicies (pushed there as a conflict during the first
+       addPoint), so don't free it separately — freeStack handles it. */
+    free(m->packed_simplices);
+    freeStack(m->reusable_bfs, NULL);
+    free(m->edge_buf);
     freeStack(m->deadSimplicies, free);
-
-    while (!isEmpty(m->deadVoronoiCells)) {
-        voronoiCell *vc = pop(m->deadVoronoiCells);
-        int i;
-        for (i = 0; i < vc->nallocated; i++) {
-            free(vc->points[i]);
-        }
-        free(vc->points);
-        freeArrayList(vc->verticies, NULL);
-        free(vc);
-    }
-
-    freeStack(m->deadVoronoiCells, NULL);
     freeLinkedList(m->tets, free);
-    freeArrayList(m->conflicts, free);
+    freeArrayList(m->conflicts, NULL); /* empty after normal build; elements owned by deadSimplicies */
     freeArrayList(m->updates, NULL);
     freeNeighbourUpdates(m->neighbourUpdates);
     free(m->simplicies_kd);
@@ -1554,9 +959,8 @@ void freeMesh(mesh *m) {
 }
 
 /******************************************************************************/
-// This will give us the volume of the arbitrary tetrahedron formed by 
+// This will give us the volume of the arbitrary tetrahedron formed by
 // v1, v2, v3, v4
-// All arguments are arrays of length three of doubles.
 
 double volumeOfTetrahedron(double *a, double *b, double *c, double *d) {
     double a_d[3], b_d[3], c_d[3], cross[3];
@@ -1608,7 +1012,6 @@ void vertexAdd(double *a, double *b, double *out) {
 }
 
 /******************************************************************************/
-// Note that this modifies the actual value of the given vertex.
 
 void vertexByScalar(double *a, double b, double *out) {
     out[0] = a[0] * b;
@@ -1618,7 +1021,6 @@ void vertexByScalar(double *a, double b, double *out) {
 
 /******************************************************************************/
 // This function will compute the circumcenter of a given simplex.
-// -it returns the radius.-
 
 void circumCenter(simplex *s, double *out) {
     vertex *a, *b, *c, *d;
@@ -1659,10 +1061,6 @@ void circumCenter(simplex *s, double *out) {
     vertexByScalar(sum, 1 / (double) (denominator), out);
 
     vertexAdd(out, a->v, out);
-
-    // Calculate the radius of this sphere. - We don't actually need this.
-    // But if we need it for debugging, we can add it back in.
-    // return sqrt((double)squaredDistance(sum))/(double)denominator;
 }
 
 /******************************************************************************/
@@ -1713,21 +1111,13 @@ void getRange(vertex *ps, int n, vertex *min, vertex *max, vertex *range, int r)
 }
 
 /*******************************************************************************
-* Due to the complexity of the Delaunay Meshing, we provide more extensive     *
-* debugging tests. We perform checks to ensure that the mesh is Delaunay, to   *
-* check that all of the simplicies are consistantly oriented, and to check     *
-* that all neighbour relations are correctly assigned.                         *
+* Unit testing.                                                                *
 *******************************************************************************/
 
-/* Turn on the unit testing for this file.                            */
-/* We can then compile this file and run it to perform self-testing.  */
 #ifdef _TEST_
 
 #include <sys/time.h>
-/* Most tests rely on asserts: so we make sure these are turned on. */
 #undef NDEBUG
-/* Set this to give more or less debugging information. */
-/* The number of points to use in testing. */
 #define NUM_TEST_POINTS 1e4
 
 /******************************************************************************/
@@ -1755,7 +1145,6 @@ for (i=0; i<NUM_TEST_POINTS; i++)
   ps[i].Y = (double)rand() / ((double)RAND_MAX + 1);
   ps[i].Z = (double)rand() / ((double)RAND_MAX + 1);
   ps[i].index = i;
-  ps[i].voronoiVolume = -1;
 }
 
 mesh *delaunayMesh = newMesh();

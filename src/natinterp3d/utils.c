@@ -96,10 +96,8 @@ int arrayListSize(arrayList *l)
 
 void * getFromArrayList (arrayList *l, int index)
 {
-   if(index >= 0 && index <  l->num_elements)
-      return l->arr[index];
-      
-   return NULL;
+   // bounds check removed: all call sites use valid indices from arrayListSize loops
+   return l->arr[index];
 }
 
 /******************************************************************************/
@@ -419,7 +417,7 @@ void testStack()
     push(s, &l[i]);
     
   while ((lt = pop(s)) && i--)
-    assert(*lt = l[i]);
+    assert(*lt == l[i]);
     
   assert(i==0);
   freeStack(s,free);

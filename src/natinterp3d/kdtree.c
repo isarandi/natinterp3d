@@ -78,6 +78,11 @@ struct kdtree {
 	int dim;
 	struct kdnode *root;
 	struct kdhyperrect *rect;
+	/* Bulk allocation pool for nodes and their pos arrays */
+	struct kdnode *node_pool;
+	double *pos_pool;
+	int pool_used;
+	int pool_cap;
 };
 
 struct kdres {
@@ -89,8 +94,8 @@ struct kdres {
 #define SQ(x)			((x) * (x))
 
 
-static void clear_rec(struct kdnode *node);
-static int insert_rec(struct kdnode **node, const double *pos, int data, int dir, int dim);
+static void clear_rec(struct kdnode *node, struct kdtree *tree);
+static int insert_rec(struct kdnode **node, const double *pos, int data, int dir, struct kdtree *tree);
 static int rlist_insert(struct res_node *list, struct kdnode *item, double dist_sq);
 static void clear_results(struct kdres *set);
 
@@ -121,6 +126,10 @@ struct kdtree *kd_create(int k)
 	tree->dim = k;
 	tree->root = 0;
 	tree->rect = 0;
+	tree->node_pool = 0;
+	tree->pos_pool = 0;
+	tree->pool_used = 0;
+	tree->pool_cap = 0;
 
 	return tree;
 }
@@ -133,21 +142,34 @@ void kd_free(struct kdtree *tree)
 	}
 }
 
-static void clear_rec(struct kdnode *node)
+static void clear_rec(struct kdnode *node, struct kdtree *tree)
 {
 	if(!node) return;
 
-	clear_rec(node->left);
-	clear_rec(node->right);
+	clear_rec(node->left, tree);
+	clear_rec(node->right, tree);
 
-	free(node->pos);
-	free(node);
+	/* Only free individually-allocated nodes (not pool-allocated) */
+	if(!tree->node_pool || node < tree->node_pool || node >= tree->node_pool + tree->pool_cap) {
+		free(node->pos);
+		free(node);
+	}
 }
 
 void kd_clear(struct kdtree *tree)
 {
-	clear_rec(tree->root);
+	clear_rec(tree->root, tree);
 	tree->root = 0;
+
+	/* Free bulk pools if allocated */
+	if (tree->node_pool) {
+		free(tree->node_pool);
+		free(tree->pos_pool);
+		tree->node_pool = 0;
+		tree->pos_pool = 0;
+		tree->pool_used = 0;
+		tree->pool_cap = 0;
+	}
 
 	if (tree->rect) {
 		hyperrect_free(tree->rect);
@@ -156,18 +178,26 @@ void kd_clear(struct kdtree *tree)
 }
 
 
-static int insert_rec(struct kdnode **nptr, const double *pos, int data, int dir, int dim)
+static int insert_rec(struct kdnode **nptr, const double *pos, int data, int dir, struct kdtree *tree)
 {
 	int new_dir;
 	struct kdnode *node;
+	int dim = tree->dim;
 
 	if(!*nptr) {
-		if(!(node = malloc(sizeof *node))) {
-			return -1;
-		}
-		if(!(node->pos = malloc(dim * sizeof *node->pos))) {
-			free(node);
-			return -1;
+		/* Allocate from pool if available, else malloc */
+		if(tree->node_pool && tree->pool_used < tree->pool_cap) {
+			int idx = tree->pool_used++;
+			node = &tree->node_pool[idx];
+			node->pos = &tree->pos_pool[idx * dim];
+		} else {
+			if(!(node = malloc(sizeof *node))) {
+				return -1;
+			}
+			if(!(node->pos = malloc(dim * sizeof *node->pos))) {
+				free(node);
+				return -1;
+			}
 		}
 		memcpy(node->pos, pos, dim * sizeof *node->pos);
 		node->data = data;
@@ -180,14 +210,14 @@ static int insert_rec(struct kdnode **nptr, const double *pos, int data, int dir
 	node = *nptr;
 	new_dir = (node->dir + 1) % dim;
 	if(pos[node->dir] < node->pos[node->dir]) {
-		return insert_rec(&(*nptr)->left, pos, data, new_dir, dim);
+		return insert_rec(&(*nptr)->left, pos, data, new_dir, tree);
 	}
-	return insert_rec(&(*nptr)->right, pos, data, new_dir, dim);
+	return insert_rec(&(*nptr)->right, pos, data, new_dir, tree);
 }
 
 int kd_insert(struct kdtree *tree, const double *pos, int data)
 {
-	if (insert_rec(&tree->root, pos, data, 0, tree->dim)) {
+	if (insert_rec(&tree->root, pos, data, 0, tree)) {
 		return -1;
 	}
 
@@ -231,6 +261,14 @@ int kd_insertf(struct kdtree *tree, const float *pos, int data)
 #endif
 		free(buf);
 	return res;
+}
+
+void kd_preallocate(struct kdtree *tree, int n)
+{
+	tree->node_pool = malloc(n * sizeof(struct kdnode));
+	tree->pos_pool = malloc(n * tree->dim * sizeof(double));
+	tree->pool_used = 0;
+	tree->pool_cap = n;
 }
 
 int kd_insert3(struct kdtree *tree, double x, double y, double z, int data)
@@ -498,6 +536,29 @@ struct kdres *kd_nearest3f(struct kdtree *tree, float x, float y, float z)
 	pos[1] = y;
 	pos[2] = z;
 	return kd_nearest(tree, pos);
+}
+
+int kd_nearest3_data(struct kdtree *kd, double x, double y, double z)
+{
+	if (!kd || !kd->rect) return -1;
+
+	double pos[3] = {x, y, z};
+
+	/* Stack-allocated hyperrect (dim=3 hardcoded) */
+	double rect_min[3], rect_max[3];
+	memcpy(rect_min, kd->rect->min, 3 * sizeof(double));
+	memcpy(rect_max, kd->rect->max, 3 * sizeof(double));
+	struct kdhyperrect rect;
+	rect.dim = 3;
+	rect.min = rect_min;
+	rect.max = rect_max;
+
+	struct kdnode *result = kd->root;
+	double dist_sq = SQ(result->pos[0] - pos[0]) + SQ(result->pos[1] - pos[1]) + SQ(result->pos[2] - pos[2]);
+
+	kd_nearest_i(kd->root, pos, &result, &dist_sq, &rect);
+
+	return result ? result->data : -1;
 }
 
 /* ---- nearest N search ---- */
