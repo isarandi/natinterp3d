@@ -859,8 +859,9 @@ int getInsertionFreeWeightsParallel(
     precomputeOrientSigns(m);
 
     omp_set_num_threads(numThreads);
+    int si;
     #pragma omp parallel for schedule(dynamic, 64)
-    for (int si = 0; si < numQueryPoints; si++) {
+    for (si = 0; si < numQueryPoints; si++) {
         int i = order[si].original_index;
         int tid = omp_get_thread_num();
         if_scratch *scratch = scratches[tid];
@@ -908,8 +909,9 @@ int getInsertionFreeWeightsParallel(
 
     double *wv = *weightValues;
     int *wci = *weightColInds;
+    int i;
     #pragma omp parallel for schedule(static)
-    for (int i = 0; i < numQueryPoints; i++) {
+    for (i = 0; i < numQueryPoints; i++) {
         int t = queryTid[i];
         int off = queryOffset[i];
         int nc = queryCount[i];
