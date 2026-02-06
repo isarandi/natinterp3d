@@ -117,6 +117,10 @@
 #include <stdlib.h>
 #include <math.h>
 
+#ifdef _MSC_VER
+#define random rand
+#endif
+
 /* On some machines, the exact arithmetic routines might be defeated by the  */
 /*   use of internal extended precision floating-point registers.  Sometimes */
 /*   this problem can be fixed by defining certain values to be volatile,    */
