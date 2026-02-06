@@ -11,7 +11,9 @@
  * Istvan Sarandi, 2025
  ******************************************************************************/
 #include "natural_insertionfree.h"
+#ifdef _OPENMP
 #include <omp.h>
+#endif
 
 /* High bit of simplex mark field stores precomputed orient3d sign */
 #define ORIENT_POS_BIT ((uint64_t)1 << 63)
@@ -858,12 +860,18 @@ int getInsertionFreeWeightsParallel(
     packMeshSimplices(m);
     precomputeOrientSigns(m);
 
+#ifdef _OPENMP
     omp_set_num_threads(numThreads);
+#endif
     int si;
     #pragma omp parallel for schedule(dynamic, 64)
     for (si = 0; si < numQueryPoints; si++) {
         int i = order[si].original_index;
+#ifdef _OPENMP
         int tid = omp_get_thread_num();
+#else
+        int tid = 0;
+#endif
         if_scratch *scratch = scratches[tid];
         result_arena *arena = &arenas[tid];
 
