@@ -34,8 +34,7 @@ ext_modules = [
         extra_compile_args=extra_compile_args,
         define_macros=[
             ('NPY_NO_DEPRECATED_API', 'NPY_1_7_API_VERSION'),
-            ('USE_LIST_NODE_ALLOCATOR', None)
-        ],
+        ] + ([('USE_LIST_NODE_ALLOCATOR', None)] if sys.platform != 'win32' else []),
         libraries=libraries,
         extra_link_args=extra_link_args,
     )
