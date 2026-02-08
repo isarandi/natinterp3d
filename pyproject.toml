@@ -45,7 +45,6 @@ classifiers = [
     "Programming Language :: C",
     "Programming Language :: Cython",
     "Operating System :: POSIX :: Linux",
-    "Operating System :: MacOS",
     "Operating System :: Microsoft :: Windows",
     "Topic :: Scientific/Engineering",
 ]
