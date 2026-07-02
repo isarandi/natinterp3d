@@ -6,14 +6,10 @@ import importlib
 import inspect
 import os
 import re
-import sys
 from enum import Enum
 
 import setuptools_scm
 import toml
-
-# Add the project root to the path
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'src')))
 
 # Read project info from pyproject.toml
 pyproject_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'pyproject.toml'))
