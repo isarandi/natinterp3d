@@ -117,6 +117,13 @@ typedef struct
   simplex *packed_simplices;
   int num_packed;
 
+  // Precomputed circumsphere data per packed simplex (indexed like
+  // packed_simplices). packed_ccr: circumcenter xyz + smallest squared
+  // vertex-to-circumcenter distance, stride 4. packed_fcc: circumcenters
+  // of the 4 faces (face opposite p[i] at offset 3*i), stride 12.
+  double *packed_ccr;
+  double *packed_fcc;
+
   // Reusable BFS stack for updateConflictingSimplicies (avoids malloc/free per insertion)
   stack *reusable_bfs;
 

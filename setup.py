@@ -16,9 +16,9 @@ elif sys.platform == "darwin":
     libraries = ["m"]
 else:
     extra_compile_args = ["-std=c11", "-O3", "-Wall", "-Wextra", "-Wno-unused-parameter",
-                          "-fno-math-errno", "-flto",
+                          "-fno-math-errno", "-flto", "-fno-semantic-interposition",
                           "-fopenmp"]
-    extra_link_args = ["-fopenmp", "-flto"]
+    extra_link_args = ["-fopenmp", "-flto", "-fno-semantic-interposition"]
     libraries = ["m", "pthread"]
 
 if native and sys.platform != "win32":

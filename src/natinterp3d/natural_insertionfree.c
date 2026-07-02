@@ -11,12 +11,10 @@
  * Istvan Sarandi, 2025
  ******************************************************************************/
 #include "natural_insertionfree.h"
+#include <float.h>
 #ifdef _OPENMP
 #include <omp.h>
 #endif
-
-/* High bit of simplex mark field stores precomputed orient3d sign */
-#define ORIENT_POS_BIT ((uint64_t)1 << 63)
 
 /******************************************************************************/
 /* Circumcenter of a triangle in 3D from raw coordinates.                     */
@@ -84,28 +82,67 @@ static void circumCenterTet(double *a, double *b, double *c, double *d, double *
 }
 
 /******************************************************************************/
+/* Circumcenter of a tetrahedron plus a conservative bound on its rounding    */
+/* error (distance between the computed and the true circumcenter). The       */
+/* bound is a standard forward estimate: eps times the magnitude sum of the   */
+/* numerator terms over the denominator. For sliver tets the denominator      */
+/* (6 times the volume) is tiny and the bound becomes large, correctly        */
+/* flagging the circumcenter as unreliable. Used at precompute time only.     */
+/******************************************************************************/
+static void circumCenterTetErr(double *a, double *b, double *c, double *d,
+                               double *out, double *err) {
+    double b_a[3], c_a[3], d_a[3];
+    double cross1[3], cross2[3], cross3[3];
+    double mult1[3], mult2[3], mult3[3], sum[3];
+
+    vertexSub(b, a, b_a);
+    vertexSub(c, a, c_a);
+    vertexSub(d, a, d_a);
+
+    crossProduct(b_a, c_a, cross1);
+    crossProduct(d_a, b_a, cross2);
+    crossProduct(c_a, d_a, cross3);
+
+    vertexByScalar(cross1, squaredDistance(d_a), mult1);
+    vertexByScalar(cross2, squaredDistance(c_a), mult2);
+    vertexByScalar(cross3, squaredDistance(b_a), mult3);
+
+    vertexAdd(mult1, mult2, sum);
+    vertexAdd(mult3, sum, sum);
+
+    double denom = 2.0 * scalarProduct(b_a, cross3);
+    if (fabs(denom) < 1e-30) {
+        /* Degenerate (coplanar): centroid fallback, error unbounded */
+        out[0] = (a[0] + b[0] + c[0] + d[0]) * 0.25;
+        out[1] = (a[1] + b[1] + c[1] + d[1]) * 0.25;
+        out[2] = (a[2] + b[2] + c[2] + d[2]) * 0.25;
+        *err = HUGE_VAL;
+        return;
+    }
+    vertexByScalar(sum, 1.0 / denom, out);
+    vertexAdd(out, a, out);
+
+    double mag = 0.0;
+    for (int i = 0; i < 3; i++) {
+        mag += fabs(mult1[i]) + fabs(mult2[i]) + fabs(mult3[i]);
+    }
+    *err = 32.0 * DBL_EPSILON * mag / fabs(denom);
+}
+
+/******************************************************************************/
 /* Volume of the Voronoi subcell of vertex pk within tet (pk, pa, pb, pc).   */
 /*                                                                            */
 /* Uses algebraic simplification: the 6 signed sub-tetrahedra reduce to      */
 /* 3 cross products and 3 dot products (instead of 6 of each).               */
 /******************************************************************************/
-static double voronoiSubcellVolume(
+static inline double voronoiSubcellVolumeOriented(
     double *pk, double *pa, double *pb, double *pc,
-    double *c_tet, double *c_fab, double *c_fac, double *c_fbc)
+    double *c_tet, double *c_fab, double *c_fac, double *c_fbc,
+    int swap)
 {
-    /* Orientation check (inline to avoid redundant vertex subtractions) */
-    double ta[3], tb[3], tc[3];
-    ta[0] = pa[0]-pk[0]; ta[1] = pa[1]-pk[1]; ta[2] = pa[2]-pk[2];
-    tb[0] = pb[0]-pk[0]; tb[1] = pb[1]-pk[1]; tb[2] = pb[2]-pk[2];
-    tc[0] = pc[0]-pk[0]; tc[1] = pc[1]-pk[1]; tc[2] = pc[2]-pk[2];
-    double ox = tb[1]*tc[2] - tb[2]*tc[1];
-    double oy = tb[2]*tc[0] - tb[0]*tc[2];
-    double oz = tb[0]*tc[1] - tb[1]*tc[0];
-    double sv = ta[0]*ox + ta[1]*oy + ta[2]*oz;
-
     double *a = pa, *b = pb;
     double *fab = c_fab, *fac = c_fac, *fbc = c_fbc;
-    if (sv < 0) {
+    if (swap) {
         a = pb; b = pa;
         fac = c_fbc; fbc = c_fac;
     }
@@ -145,6 +182,24 @@ static double voronoiSubcellVolume(
     return vol / 12.0;
 }
 
+static double voronoiSubcellVolume(
+    double *pk, double *pa, double *pb, double *pc,
+    double *c_tet, double *c_fab, double *c_fac, double *c_fbc)
+{
+    /* Orientation check (inline to avoid redundant vertex subtractions) */
+    double ta[3], tb[3], tc[3];
+    ta[0] = pa[0]-pk[0]; ta[1] = pa[1]-pk[1]; ta[2] = pa[2]-pk[2];
+    tb[0] = pb[0]-pk[0]; tb[1] = pb[1]-pk[1]; tb[2] = pb[2]-pk[2];
+    tc[0] = pc[0]-pk[0]; tc[1] = pc[1]-pk[1]; tc[2] = pc[2]-pk[2];
+    double ox = tb[1]*tc[2] - tb[2]*tc[1];
+    double oy = tb[2]*tc[0] - tb[0]*tc[2];
+    double oz = tb[0]*tc[1] - tb[1]*tc[0];
+    double sv = ta[0]*ox + ta[1]*oy + ta[2]*oz;
+
+    return voronoiSubcellVolumeOriented(pk, pa, pb, pc,
+                                        c_tet, c_fab, c_fac, c_fbc, sv < 0);
+}
+
 /******************************************************************************/
 /* Hash set operations for simplex pointer tracking (with generation counter) */
 /******************************************************************************/
@@ -155,20 +210,15 @@ static inline unsigned int hashPtr(simplex *p, int size) {
     return (unsigned int)(v & (size - 1));
 }
 
-/* Low-level insert into interleaved table (no resize check). */
-static inline int hashSetInsertRaw(visited_entry *table, int size,
-                                    uint32_t gen, simplex *p) {
+/* Probe for p. Returns the slot where p lives (found=1) or where it would
+ * be inserted (found=0). */
+static inline unsigned int hashProbe(visited_entry *table, int size,
+                                     uint32_t gen, simplex *p, int *found) {
     int mask = size - 1;
     unsigned int h = hashPtr(p, size);
     while (1) {
-        if (table[h].gen != gen) {
-            table[h].ptr = p;
-            table[h].gen = gen;
-            return 0; /* newly inserted */
-        }
-        if (table[h].ptr == p) {
-            return 1; /* already present */
-        }
+        if (table[h].gen != gen) { *found = 0; return h; }
+        if (table[h].ptr == p)   { *found = 1; return h; }
         h = (h + 1) & mask;
     }
 }
@@ -181,75 +231,16 @@ static void visitedGrow(if_scratch *s) {
     int new_size = old_size * 2;
     visited_entry *new_table = calloc(new_size, sizeof(visited_entry));
     for (int i = 0; i < old_size; i++) {
-        if (old_table[i].gen == gen)
-            hashSetInsertRaw(new_table, new_size, gen, old_table[i].ptr);
+        if (old_table[i].gen == gen) {
+            int found;
+            unsigned int slot = hashProbe(new_table, new_size, gen,
+                                          old_table[i].ptr, &found);
+            new_table[slot] = old_table[i];
+        }
     }
     free(old_table);
     s->visited = new_table;
     s->visited_size = new_size;
-}
-
-/* Returns 1 if already present, 0 if newly inserted. Grows table if needed. */
-static inline int hashSetInsert(if_scratch *s, simplex *p) {
-    if (s->visited_count * 4 >= s->visited_size * 3) /* >75% load */
-        visitedGrow(s);
-    int ret = hashSetInsertRaw(s->visited, s->visited_size,
-                                s->visited_generation, p);
-    if (ret == 0) s->visited_count++;
-    return ret;
-}
-
-static inline int hashSetContains(visited_entry *table, int size,
-                                   uint32_t gen, simplex *p) {
-    int mask = size - 1;
-    unsigned int h = hashPtr(p, size);
-    while (1) {
-        if (table[h].gen != gen) return 0;
-        if (table[h].ptr == p) return 1;
-        h = (h + 1) & mask;
-    }
-}
-
-/******************************************************************************/
-/* Face circumcenter cache                                                    */
-/******************************************************************************/
-
-static inline void sortThreePointers(vertex *a, vertex *b, vertex *c,
-                                      vertex **o0, vertex **o1, vertex **o2) {
-    if (a > b) { vertex *t = a; a = b; b = t; }
-    if (b > c) { vertex *t = b; b = c; c = t; }
-    if (a > b) { vertex *t = a; a = b; b = t; }
-    *o0 = a; *o1 = b; *o2 = c;
-}
-
-static inline unsigned int hashFaceKey(vertex *a, vertex *b, vertex *c, int size) {
-    uintptr_t h = (uintptr_t)a * 0x9e3779b97f4a7c15ULL;
-    h ^= (uintptr_t)b * 0x517cc1b727220a95ULL;
-    h ^= (uintptr_t)c * 0x6c62272e07bb0142ULL;
-    return (unsigned int)(h & (size - 1));
-}
-
-/* Look up or compute+insert a face circumcenter. Returns pointer to cached cc. */
-static inline double *faceCCLookup(if_scratch *s, vertex *va, vertex *vb, vertex *vc) {
-    vertex *k0, *k1, *k2;
-    sortThreePointers(va, vb, vc, &k0, &k1, &k2);
-    int mask = s->face_cc_size - 1;
-    unsigned int h = hashFaceKey(k0, k1, k2, s->face_cc_size);
-    uint32_t gen = s->face_cc_gen;
-    while (1) {
-        face_cc_entry *e = &s->face_cc[h];
-        if (e->gen != gen) {
-            /* Empty slot: compute and store */
-            circumCenterTri3D(va->v, vb->v, vc->v, e->cc);
-            e->k0 = k0; e->k1 = k1; e->k2 = k2;
-            e->gen = gen;
-            return e->cc;
-        }
-        if (e->k0 == k0 && e->k1 == k1 && e->k2 == k2) {
-            return e->cc; /* cache hit */
-        }
-        h = (h + 1) & mask;
-    }
 }
 
 /******************************************************************************/
@@ -286,10 +277,7 @@ if_scratch *newIfScratch(int numDataPoints) {
     s->neighbor_map = malloc(numDataPoints * sizeof(int));
     memset(s->neighbor_map, 0xff, numDataPoints * sizeof(int)); /* all -1 */
 
-    /* Face CC cache: sized for typical cavity (~50 faces) */
-    s->face_cc_size = 256;
-    s->face_cc = calloc(s->face_cc_size, sizeof(face_cc_entry));
-    s->face_cc_gen = 1;
+    s->boundary_fcc = malloc(s->boundary_cap * sizeof(double *));
 
     return s;
 }
@@ -302,7 +290,7 @@ void freeIfScratch(if_scratch *s) {
     free(s->neighbor_indices);
     free(s->stolen_volumes);
     free(s->neighbor_map);
-    free(s->face_cc);
+    free(s->boundary_fcc);
     free(s);
 }
 
@@ -324,13 +312,6 @@ void resetIfScratch(if_scratch *s) {
         s->neighbor_map[s->neighbor_indices[i]] = -1;
     }
     s->neighbor_count = 0;
-
-    /* Reset face CC cache: O(1) generation increment */
-    s->face_cc_gen++;
-    if (s->face_cc_gen == 0) {
-        memset(s->face_cc, 0, s->face_cc_size * sizeof(face_cc_entry));
-        s->face_cc_gen = 1;
-    }
 }
 
 /******************************************************************************/
@@ -355,6 +336,7 @@ static inline void ensureBoundaryCap(if_scratch *s, int needed) {
     if (needed > s->boundary_cap) {
         s->boundary_cap = needed * 2;
         s->boundary_verts = realloc(s->boundary_verts, s->boundary_cap * 3 * sizeof(vertex *));
+        s->boundary_fcc = realloc(s->boundary_fcc, s->boundary_cap * sizeof(double *));
     }
 }
 
@@ -447,41 +429,99 @@ static void packMeshSimplices(mesh *m) {
 
     m->packed_simplices = packed;
     m->num_packed = n;
-}
 
-/******************************************************************************/
-/* Precompute orient3d signs and store in high bit of simplex mark field.     */
-/* Called once before queries; the mark field is unused during read-only BFS. */
-/* Uses packed array if available for better cache behavior.                  */
-/******************************************************************************/
-static void precomputeOrientSigns(mesh *m) {
-    if (m->packed_simplices) {
-        for (int i = 0; i < m->num_packed; i++) {
-            simplex *s = &m->packed_simplices[i];
-            if (orient3dfast(s->p[0]->v, s->p[1]->v, s->p[2]->v, s->p[3]->v) > 0)
-                s->mark = ORIENT_POS_BIT;
-            else
-                s->mark = 0;
+    /* Precompute circumsphere data: the mesh is static during queries, so
+     * every tet circumcenter and face circumcenter is computed exactly once
+     * here instead of per query.
+     *
+     * The in-sphere BFS test compares dist2(q, cc) against two thresholds:
+     * below t_in the query is certainly inside the true circumsphere, above
+     * t_out certainly outside, accounting for the rounding error of the
+     * computed circumcenter (which is unbounded for sliver tets). In the
+     * ambiguous band the caller falls back to the determinant test
+     * (inspherefast), whose error stays confined to a narrow band around
+     * the true sphere. For well-shaped tets the band is a few ulps wide,
+     * so the fallback is rare. */
+    m->packed_ccr = malloc((size_t)n * 8 * sizeof(double));
+    m->packed_fcc = malloc((size_t)n * 12 * sizeof(double));
+    for (int i = 0; i < n; i++) {
+        simplex *s2 = &packed[i];
+        double *ccr = &m->packed_ccr[(size_t)i * 8];
+        double err;
+        circumCenterTetErr(s2->p[0]->v, s2->p[1]->v, s2->p[2]->v, s2->p[3]->v,
+                           ccr, &err);
+        double r2min = -1.0, r2max = -1.0;
+        for (int j = 0; j < 4; j++) {
+            double dx = s2->p[j]->v[0] - ccr[0];
+            double dy = s2->p[j]->v[1] - ccr[1];
+            double dz = s2->p[j]->v[2] - ccr[2];
+            double d2 = dx * dx + dy * dy + dz * dz;
+            if (r2min < 0 || d2 < r2min) r2min = d2;
+            if (d2 > r2max) r2max = d2;
         }
-    } else {
-        listNode *iter = topOfLinkedList(m->tets);
-        simplex *s;
-        while ((s = nextElement(m->tets, &iter))) {
-            if (orient3dfast(s->p[0]->v, s->p[1]->v, s->p[2]->v, s->p[3]->v) > 0)
-                s->mark = ORIENT_POS_BIT;
-            else
-                s->mark = 0;
+        /* True center is within err of cc, so the true radius lies in
+         * [sqrt(r2min) - err, sqrt(r2max) + err]; a query is certainly
+         * inside if dist(q, cc) < sqrt(r2min) - 2*err and certainly
+         * outside if dist(q, cc) > sqrt(r2max) + 2*err. */
+        double rin = sqrt(r2min) - 2.0 * err;
+        ccr[3] = rin > 0 ? rin * rin : -1.0;  /* t_in (< 0: never certain) */
+        double rout = sqrt(r2max) + 2.0 * err;
+        ccr[4] = rout * rout;                  /* t_out */
+
+        /* Orientation sign of (p0, p1, p2, p3): the subcell formula needs
+         * to know it for each (vertex, other three) permutation, where it
+         * equals this sign flipped by the permutation's parity. */
+        {
+            double *q0 = s2->p[0]->v, *q1 = s2->p[1]->v;
+            double *q2 = s2->p[2]->v, *q3 = s2->p[3]->v;
+            double ta[3] = {q1[0]-q0[0], q1[1]-q0[1], q1[2]-q0[2]};
+            double tb[3] = {q2[0]-q0[0], q2[1]-q0[1], q2[2]-q0[2]};
+            double tc[3] = {q3[0]-q0[0], q3[1]-q0[1], q3[2]-q0[2]};
+            double sv = ta[0]*(tb[1]*tc[2] - tb[2]*tc[1])
+                      + ta[1]*(tb[2]*tc[0] - tb[0]*tc[2])
+                      + ta[2]*(tb[0]*tc[1] - tb[1]*tc[0]);
+            ccr[5] = sv < 0 ? -1.0 : 1.0;
         }
+        ccr[6] = ccr[7] = 0.0;
+
+        /* Face circumcenters: face opposite p[j] at offset 3*j */
+        double *fcc = &m->packed_fcc[(size_t)i * 12];
+        circumCenterTri3D(s2->p[1]->v, s2->p[2]->v, s2->p[3]->v, &fcc[0]);
+        circumCenterTri3D(s2->p[0]->v, s2->p[2]->v, s2->p[3]->v, &fcc[3]);
+        circumCenterTri3D(s2->p[0]->v, s2->p[1]->v, s2->p[3]->v, &fcc[6]);
+        circumCenterTri3D(s2->p[0]->v, s2->p[1]->v, s2->p[2]->v, &fcc[9]);
     }
 }
 
 /******************************************************************************/
-/* Find Bowyer-Watson cavity: BFS from containing simplex.                    */
-/* Cavity = all tets whose circumsphere contains the query point.             */
-/* Uses inspherefast for the in-circumsphere test.                            */
-/*                                                                            */
-/* After this function, scratch->visited contains ONLY cavity members,        */
-/* suitable for O(1) cavity membership checks in boundary extraction.         */
+/* In-circumsphere test via precomputed circumcenter: certainly inside below  */
+/* t_in, certainly outside above t_out; in the (typically few ulps wide)      */
+/* ambiguous band, fall back to the determinant test.                         */
+/******************************************************************************/
+static inline int inCircumsphere(mesh *m, simplex *cur, double *query) {
+    double *ccr = &m->packed_ccr[(cur - m->packed_simplices) * 8];
+    double dx = query[0] - ccr[0];
+    double dy = query[1] - ccr[1];
+    double dz = query[2] - ccr[2];
+    double d2 = dx * dx + dy * dy + dz * dz;
+
+    if (d2 < ccr[3]) return 1;
+    if (d2 > ccr[4]) return 0;
+    double o = orient3dfast(cur->p[0]->v, cur->p[1]->v, cur->p[2]->v,
+                            cur->p[3]->v);
+    double is = inspherefast(cur->p[0]->v, cur->p[1]->v, cur->p[2]->v,
+                             cur->p[3]->v, query);
+    return o > 0 ? is > 0 : is < 0;
+}
+
+/******************************************************************************/
+/* Find the Bowyer-Watson cavity (all tets whose circumsphere contains the    */
+/* query point) by BFS from the containing simplex, extracting the boundary   */
+/* faces and natural neighbors in the same pass: when a cavity tet looks at   */
+/* a neighbor, the neighbor's verdict (from the visited hash, or tested on    */
+/* first encounter) immediately decides whether the shared face is boundary.  */
+/* Each tet is tested exactly once and each boundary face recorded exactly    */
+/* once, from its unique cavity side.                                         */
 /******************************************************************************/
 static void findCavity(double *query, mesh *m, if_scratch *scratch) {
     vertex qv;
@@ -491,87 +531,73 @@ static void findCavity(double *query, mesh *m, if_scratch *scratch) {
     simplex *start = findContainingSimplex(m, &qv);
     if (!start) return;
 
-    /* We use a two-phase approach:
-     * Phase 1: BFS using visited hash for dedup (visited = all checked tets)
-     * Phase 2: Rebuild visited to contain only cavity members */
+    /* Empty cavity if the query is not inside the start's circumsphere
+     * (e.g. it exactly coincides with a mesh vertex). */
+    if (!inCircumsphere(m, start, query)) return;
 
-    scratch->bfs_top = 0;
+    {
+        int found;
+        unsigned int slot = hashProbe(scratch->visited, scratch->visited_size,
+                                      scratch->visited_generation, start, &found);
+        scratch->visited[slot].ptr = start;
+        scratch->visited[slot].gen = scratch->visited_generation;
+        scratch->visited[slot].in_cavity = 1;
+        scratch->visited_count++;
+    }
+    ensureCavityCap(scratch, 1);
+    scratch->cavity[scratch->cavity_count++] = start;
     ensureBfsCap(scratch, 1);
     scratch->bfs_stack[scratch->bfs_top++] = start;
 
     while (scratch->bfs_top > 0) {
         simplex *cur = scratch->bfs_stack[--scratch->bfs_top];
+        double *fcc = &m->packed_fcc[(cur - m->packed_simplices) * 12];
 
-        /* Skip if already checked */
-        if (hashSetInsert(scratch, cur))
-            continue;
-
-        /* In-circumsphere test using precomputed orient sign (from mark field) */
-        double in_sph;
-        if (cur->mark & ORIENT_POS_BIT) {
-            in_sph = inspherefast(cur->p[0]->v, cur->p[1]->v, cur->p[2]->v, cur->p[3]->v, query);
-        } else {
-            in_sph = inspherefast(cur->p[1]->v, cur->p[0]->v, cur->p[2]->v, cur->p[3]->v, query);
-        }
-
-        if (in_sph > 0) {
-            /* Query inside circumsphere: add to cavity, push neighbors */
-            ensureCavityCap(scratch, scratch->cavity_count + 1);
-            scratch->cavity[scratch->cavity_count++] = cur;
-
-            for (int i = 0; i < 4; i++) {
-                if (cur->s[i] && !hashSetContains(scratch->visited,
-                        scratch->visited_size, scratch->visited_generation, cur->s[i])) {
-                    ensureBfsCap(scratch, scratch->bfs_top + 1);
-                    scratch->bfs_stack[scratch->bfs_top++] = cur->s[i];
+        for (int fi = 0; fi < 4; fi++) {
+            simplex *nbr = cur->s[fi];
+            int boundary;
+            if (nbr == NULL) {
+                boundary = 1;
+            } else {
+                if ((scratch->visited_count + 1) * 4 >= scratch->visited_size * 3)
+                    visitedGrow(scratch); /* keep load < 75% */
+                int found;
+                unsigned int slot = hashProbe(scratch->visited,
+                                              scratch->visited_size,
+                                              scratch->visited_generation,
+                                              nbr, &found);
+                if (found) {
+                    boundary = !scratch->visited[slot].in_cavity;
+                } else {
+                    int in = inCircumsphere(m, nbr, query);
+                    scratch->visited[slot].ptr = nbr;
+                    scratch->visited[slot].gen = scratch->visited_generation;
+                    scratch->visited[slot].in_cavity = (uint32_t)in;
+                    scratch->visited_count++;
+                    if (in) {
+                        ensureCavityCap(scratch, scratch->cavity_count + 1);
+                        scratch->cavity[scratch->cavity_count++] = nbr;
+                        ensureBfsCap(scratch, scratch->bfs_top + 1);
+                        scratch->bfs_stack[scratch->bfs_top++] = nbr;
+                    }
+                    boundary = !in;
                 }
             }
-        }
-    }
 
-    /* Phase 2: Rebuild visited hash to contain ONLY cavity members.
-     * Increment generation to logically clear the table. */
-    scratch->visited_generation++;
-    if (scratch->visited_generation == 0) {
-        memset(scratch->visited, 0, scratch->visited_size * sizeof(visited_entry));
-        scratch->visited_generation = 1;
-    }
-
-    /* Ensure table is large enough for cavity_count at <75% load */
-    while (scratch->cavity_count * 4 >= scratch->visited_size * 3) {
-        free(scratch->visited);
-        scratch->visited_size *= 2;
-        scratch->visited = calloc(scratch->visited_size, sizeof(visited_entry));
-    }
-    scratch->visited_count = scratch->cavity_count;
-    for (int i = 0; i < scratch->cavity_count; i++) {
-        hashSetInsertRaw(scratch->visited, scratch->visited_size,
-                         scratch->visited_generation, scratch->cavity[i]);
-    }
-}
-
-/******************************************************************************/
-/* Extract boundary faces and collect natural neighbor vertex indices.         */
-/* A boundary face is a face of a cavity tet whose opposite neighbor          */
-/* is NULL or not in the cavity.                                              */
-/* After findCavity, scratch->visited contains exactly the cavity members.    */
-/******************************************************************************/
-static void extractBoundaryAndNeighbors(if_scratch *scratch) {
-    for (int ci = 0; ci < scratch->cavity_count; ci++) {
-        simplex *s = scratch->cavity[ci];
-        for (int fi = 0; fi < 4; fi++) {
-            simplex *nbr = s->s[fi];
-            if (nbr == NULL || !hashSetContains(scratch->visited,
-                    scratch->visited_size, scratch->visited_generation, nbr)) {
+            if (boundary) {
                 /* Boundary face: get the 3 vertices of face fi */
                 vertex *v1, *v2, *v3;
-                getFaceVerticies3(s, fi, &v1, &v2, &v3);
+                getFaceVerticies3(cur, fi, &v1, &v2, &v3);
 
                 ensureBoundaryCap(scratch, scratch->boundary_count + 1);
                 int bi = scratch->boundary_count * 3;
                 scratch->boundary_verts[bi + 0] = v1;
                 scratch->boundary_verts[bi + 1] = v2;
                 scratch->boundary_verts[bi + 2] = v3;
+                /* Precomputed circumcenter of this face: getFaceVerticies3
+                 * returns for face index fi the face opposite p[3-fi], and
+                 * packed_fcc stores the face opposite p[j] at offset 3*j. */
+                scratch->boundary_fcc[scratch->boundary_count] = &fcc[(3 - fi) * 3];
                 scratch->boundary_count++;
 
                 /* Register natural neighbors (skip super vertices with index < 0) */
@@ -591,12 +617,15 @@ static void extractBoundaryAndNeighbors(if_scratch *scratch) {
 void getWeightsSingleQueryIF(double *query, mesh *m, if_scratch *scratch) {
     resetIfScratch(scratch);
 
-    /* Step 1: Find cavity (also sets up visited = cavity for boundary check) */
+    /* Steps 1+2: Find cavity; boundary faces and natural neighbors are
+     * extracted in the same pass. */
     findCavity(query, m, scratch);
     if (scratch->cavity_count == 0) {
         /* Empty cavity: the query may exactly coincide with a mesh vertex.
-         * inspherefast returns 0 (on-sphere) for tets incident to that vertex,
-         * so they're excluded from the cavity. Find and assign weight 1. */
+         * Such a query is never certainly-inside (its distance to the
+         * circumcenter is at least the smallest vertex distance), and the
+         * ambiguous-band determinant is exactly zero for tets incident to
+         * that vertex, so they are excluded. Find and assign weight 1. */
         vertex qv;
         qv.v[0] = query[0]; qv.v[1] = query[1]; qv.v[2] = query[2];
         qv.index = -1;
@@ -621,35 +650,17 @@ void getWeightsSingleQueryIF(double *query, mesh *m, if_scratch *scratch) {
         return;
     }
 
-    /* Step 2: Extract boundary faces and identify natural neighbors */
-    extractBoundaryAndNeighbors(scratch);
     if (scratch->neighbor_count == 0) return;
 
-    /* Ensure face CC cache is large enough (<75% load for 4*cavity_count faces) */
-    {
-        int needed = scratch->cavity_count * 4;
-        while (needed * 4 >= scratch->face_cc_size * 3) {
-            free(scratch->face_cc);
-            scratch->face_cc_size *= 2;
-            scratch->face_cc = calloc(scratch->face_cc_size, sizeof(face_cc_entry));
-        }
-    }
-
     /* Step 3: Old contributions -- cavity tets.
-     * For each cavity tet, look up face circumcenters from cache (shared faces
-     * between adjacent tets are computed once and reused).
-     * fcc[i] = circumcenter of face opposite to p[i]. */
+     * Tet and face circumcenters are precomputed (see packMeshSimplices):
+     * c_tet at packed_ccr[8*idx], fcc of face opposite p[i] at
+     * packed_fcc[12*idx + 3*i]. */
     for (int ci = 0; ci < scratch->cavity_count; ci++) {
         simplex *s = scratch->cavity[ci];
-        double c_tet[3];
-        circumCenterTet(s->p[0]->v, s->p[1]->v, s->p[2]->v, s->p[3]->v, c_tet);
-
-        /* Look up 4 face CCs from cache: fcc[i] = CC of face opposite to p[i] */
-        double *fcc[4];
-        fcc[0] = faceCCLookup(scratch, s->p[1], s->p[2], s->p[3]);
-        fcc[1] = faceCCLookup(scratch, s->p[0], s->p[2], s->p[3]);
-        fcc[2] = faceCCLookup(scratch, s->p[0], s->p[1], s->p[3]);
-        fcc[3] = faceCCLookup(scratch, s->p[0], s->p[1], s->p[2]);
+        double *ccr = &m->packed_ccr[(s - m->packed_simplices) * 8];
+        double *fcc = &m->packed_fcc[(s - m->packed_simplices) * 12];
+        int tet_neg = ccr[5] < 0.0;
 
         for (int vi = 0; vi < 4; vi++) {
             vertex *pk = s->p[vi];
@@ -664,57 +675,62 @@ void getWeightsSingleQueryIF(double *query, mesh *m, if_scratch *scratch) {
             if (o0 > o1) { int tmp = o0; o0 = o1; o1 = tmp; }
 
             /* Face CCs for faces containing pk:
-             *   c_fab = CC(pk, p[o0], p[o1]) = face opposite p[o2] = fcc[o2]
-             *   c_fac = CC(pk, p[o0], p[o2]) = face opposite p[o1] = fcc[o1]
-             *   c_fbc = CC(pk, p[o1], p[o2]) = face opposite p[o0] = fcc[o0] */
-            double vol = voronoiSubcellVolume(
+             *   c_fab = CC(pk, p[o0], p[o1]) = face opposite p[o2]
+             *   c_fac = CC(pk, p[o0], p[o2]) = face opposite p[o1]
+             *   c_fbc = CC(pk, p[o1], p[o2]) = face opposite p[o0]
+             * The orientation of (pk, p[o0], p[o1], p[o2]) is the tet's
+             * orientation flipped by the permutation parity, which for the
+             * sorted (o0, o1, o2) is odd exactly for odd vi. */
+            double vol = voronoiSubcellVolumeOriented(
                 pk->v, s->p[o0]->v, s->p[o1]->v, s->p[o2]->v,
-                c_tet, fcc[o2], fcc[o1], fcc[o0]);
+                ccr, &fcc[o2 * 3], &fcc[o1 * 3], &fcc[o0 * 3],
+                tet_neg ^ (vi & 1));
 
             scratch->stolen_volumes[slot] += vol;
         }
     }
 
     /* Step 4: New contributions -- virtual tets (query + each boundary face).
-     * For each boundary face, compute the boundary face CC once, then
-     * for each data vertex, subtract the virtual tet subcell volume. */
+     * For each boundary face, compute the virtual tet circumcenter and the
+     * three virtual-face circumcenters (triangles through the query and one
+     * face edge; each is shared by two of the face's vertices), then for
+     * each data vertex, subtract the virtual tet subcell volume. */
     for (int bi = 0; bi < scratch->boundary_count; bi++) {
         vertex *fa = scratch->boundary_verts[bi * 3 + 0];
         vertex *fb = scratch->boundary_verts[bi * 3 + 1];
         vertex *fc = scratch->boundary_verts[bi * 3 + 2];
 
+        int slot_a = fa->index >= 0 ? scratch->neighbor_map[fa->index] : -1;
+        int slot_b = fb->index >= 0 ? scratch->neighbor_map[fb->index] : -1;
+        int slot_c = fc->index >= 0 ? scratch->neighbor_map[fc->index] : -1;
+        if (slot_a < 0 && slot_b < 0 && slot_c < 0) continue;
+
         /* Virtual tet circumcenter: (query, fa, fb, fc) */
         double c_vtet[3];
         circumCenterTet(query, fa->v, fb->v, fc->v, c_vtet);
 
-        /* Boundary face CC: reuse from cache (already computed in Step 3) */
-        double *c_face = faceCCLookup(scratch, fa, fb, fc);
+        /* Boundary face CC: precomputed, recorded during boundary extraction */
+        double *c_face = scratch->boundary_fcc[bi];
 
-        /* For each data vertex pk in this boundary face */
-        vertex *face_verts[3] = {fa, fb, fc};
-        for (int fvi = 0; fvi < 3; fvi++) {
-            vertex *pk = face_verts[fvi];
-            if (pk->index < 0) continue;
-            int slot = scratch->neighbor_map[pk->index];
-            if (slot < 0) continue;
+        /* Virtual-face circumcenters, one per face edge */
+        double cc_ab[3], cc_ac[3], cc_bc[3];
+        circumCenterTri3D(fa->v, query, fb->v, cc_ab);
+        circumCenterTri3D(fa->v, query, fc->v, cc_ac);
+        circumCenterTri3D(fb->v, query, fc->v, cc_bc);
 
-            /* Other two data vertices (not pk) */
-            vertex *ppa = face_verts[(fvi + 1) % 3];
-            vertex *ppb = face_verts[(fvi + 2) % 3];
-
-            /* Virtual tet is (pk, query, pa, pb).
-             * Face circumcenters for faces containing pk:
-             *   face(pk, query, pa), face(pk, query, pb): computed fresh
-             *   face(pk, pa, pb) = boundary face CC */
-            double c_f_q_a[3], c_f_q_b[3];
-            circumCenterTri3D(pk->v, query, ppa->v, c_f_q_a);
-            circumCenterTri3D(pk->v, query, ppb->v, c_f_q_b);
-
-            double vol = voronoiSubcellVolume(
-                pk->v, query, ppa->v, ppb->v,
-                c_vtet, c_f_q_a, c_f_q_b, c_face);
-
-            scratch->stolen_volumes[slot] -= vol;
+        /* Virtual tet is (pk, query, pa, pb); its faces containing pk are
+         * (pk, query, pa), (pk, query, pb) and (pk, pa, pb) = boundary face */
+        if (slot_a >= 0) {
+            scratch->stolen_volumes[slot_a] -= voronoiSubcellVolume(
+                fa->v, query, fb->v, fc->v, c_vtet, cc_ab, cc_ac, c_face);
+        }
+        if (slot_b >= 0) {
+            scratch->stolen_volumes[slot_b] -= voronoiSubcellVolume(
+                fb->v, query, fc->v, fa->v, c_vtet, cc_bc, cc_ab, c_face);
+        }
+        if (slot_c >= 0) {
+            scratch->stolen_volumes[slot_c] -= voronoiSubcellVolume(
+                fc->v, query, fa->v, fb->v, c_vtet, cc_ac, cc_bc, c_face);
         }
     }
 
@@ -777,9 +793,8 @@ int getInsertionFreeWeights(
     /* Spatial sorting for cache locality */
     sort_entry *order = compute_morton_order(queryPoints, numQueryPoints);
 
-    /* Pack simplices for cache-friendly BFS + precompute orient signs */
+    /* Pack simplices for cache-friendly BFS + precompute circumsphere data */
     packMeshSimplices(m);
-    precomputeOrientSigns(m);
 
     for (int si = 0; si < numQueryPoints; si++) {
         int i = order[si].original_index;
@@ -856,9 +871,8 @@ int getInsertionFreeWeightsParallel(
     /* Spatial sorting for cache locality */
     sort_entry *order = compute_morton_order(queryPoints, numQueryPoints);
 
-    /* Pack simplices for cache-friendly BFS + precompute orient signs */
+    /* Pack simplices for cache-friendly BFS + precompute circumsphere data */
     packMeshSimplices(m);
-    precomputeOrientSigns(m);
 
 #ifdef _OPENMP
     omp_set_num_threads(numThreads);

@@ -927,6 +927,8 @@ mesh *newMesh() {
     m->simplex_generation = 0;
     m->packed_simplices = NULL;
     m->num_packed = 0;
+    m->packed_ccr = NULL;
+    m->packed_fcc = NULL;
     m->reusable_bfs = newStack();
     m->edge_buf = NULL;
     m->edge_buf_cap = 0;
@@ -944,6 +946,8 @@ void freeMesh(mesh *m) {
     /* m->super is in deadSimplicies (pushed there as a conflict during the first
        addPoint), so don't free it separately — freeStack handles it. */
     free(m->packed_simplices);
+    free(m->packed_ccr);
+    free(m->packed_fcc);
     freeStack(m->reusable_bfs, NULL);
     free(m->edge_buf);
     freeStack(m->deadSimplicies, free);

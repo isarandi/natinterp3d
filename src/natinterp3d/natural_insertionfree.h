@@ -14,19 +14,14 @@
 /* Per-thread scratch space for insertion-free queries.                        */
 /******************************************************************************/
 
-/* Interleaved visited hash entry: pointer and generation co-located
- * in the same cache line for fewer cache misses during probing. */
+/* Interleaved visited hash entry: pointer, generation and cavity-membership
+ * verdict co-located in the same cache line for fewer cache misses during
+ * probing. */
 typedef struct {
     simplex *ptr;
     uint32_t gen;
+    uint32_t in_cavity;
 } visited_entry;
-
-/* Face circumcenter cache entry: keyed by sorted triple of vertex pointers. */
-typedef struct {
-    vertex *k0, *k1, *k2;  /* sorted vertex pointers (key) */
-    double cc[3];           /* cached circumcenter (value) */
-    uint32_t gen;           /* generation for O(1) reset */
-} face_cc_entry;
 
 typedef struct {
     /* Cavity: list of simplex pointers */
@@ -44,8 +39,10 @@ typedef struct {
     int visited_size;  /* power of 2, e.g. 2048 */
     int visited_count; /* number of entries in current generation */
 
-    /* Boundary faces: groups of 3 vertex pointers per face */
+    /* Boundary faces: groups of 3 vertex pointers per face, plus a pointer
+     * to the face's precomputed circumcenter (into mesh->packed_fcc) */
     vertex **boundary_verts; /* [3*i+0], [3*i+1], [3*i+2] per face */
+    double **boundary_fcc;   /* [i] = circumcenter of boundary face i */
     int boundary_count, boundary_cap;
 
     /* Natural neighbor tracking */
@@ -57,12 +54,6 @@ typedef struct {
      * Size = numDataPoints, initialized to -1. Reset per query. */
     int *neighbor_map;
     int neighbor_map_size;
-
-    /* Face circumcenter cache: avoids recomputing shared face CCs
-     * between adjacent cavity tets. Generation-based O(1) reset. */
-    face_cc_entry *face_cc;
-    int face_cc_size;          /* power of 2 */
-    uint32_t face_cc_gen;
 } if_scratch;
 
 /******************************************************************************/

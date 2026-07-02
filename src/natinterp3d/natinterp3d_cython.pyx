@@ -21,22 +21,22 @@ cdef extern from "delaunay.h" nogil:
         pass
 
 cdef extern from "natural.h" nogil:
-    void buildNewMeshAndVertices(double *dataPoints, int numDataPoints, mesh ** m, vertex ** ps)
+    void buildNewMeshAndVertices(double *dataPoints, int numDataPoints, mesh **m, vertex **ps)
     void freeMeshAndVertices(mesh *m, vertex *ps)
 
 cdef extern from "natural_insertionfree.h" nogil:
     int getInsertionFreeWeights(
             double *queryPoints, int numQueryPoints, mesh *m,
             int numDataPoints,
-            double ** weightValues, int ** weightColInds, int *weightRowPtrs)
+            double **weightValues, int **weightColInds, int *weightRowPtrs)
     int getInsertionFreeWeightsParallel(
             double *queryPoints, int numQueryPoints, mesh *m,
             int numThreads, int numDataPoints,
-            double ** weightValues, int ** weightColInds, int *weightRowPtrs)
+            double **weightValues, int **weightColInds, int *weightRowPtrs)
 
-cdef _wrap_csr(int numQueryPoints, int numDataPoints,
-               double *weightValues, int *weightColInds,
-               np.ndarray[np.int32_t, ndim=1] weightRowPtrs):
+cdef _wrap_csr(
+        int numQueryPoints, int numDataPoints, double *weightValues, int *weightColInds,
+        np.ndarray[np.int32_t, ndim=1] weightRowPtrs):
     """Wrap C-allocated CSR arrays into a scipy sparse matrix."""
     cdef np.npy_intp shape[1]
     shape[0] = weightRowPtrs[numQueryPoints]
@@ -60,7 +60,7 @@ cdef class MeshAndVertices:
         self.numDataPoints = dataPoints.shape[0]
         if dataPoints.shape[1] != 3:
             raise ValueError("Data points must have shape (num_data_points, 3)")
-        cdef double * dataPointsData = <double *> np.PyArray_DATA(dataPoints)
+        cdef double *dataPointsData = <double *> np.PyArray_DATA(dataPoints)
         with nogil:
             buildNewMeshAndVertices(dataPointsData, self.numDataPoints, &self.m, &self.ps)
 
