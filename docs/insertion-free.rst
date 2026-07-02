@@ -171,11 +171,18 @@ The per-query algorithm:
 
 1. **Find cavity.** Locate the containing simplex (via the k-d tree),
    then BFS outward. A tet is in the cavity iff its circumsphere contains
-   the query, tested with ``inspherefast`` :footcite:`shewchuk1996robust`.
+   the query. The test compares the query's squared distance to the tet's
+   precomputed circumcenter against two precomputed thresholds
+   (certainly-inside and certainly-outside, derived from an error bound on
+   the computed circumcenter); only queries in the narrow band between
+   them fall back to the ``inspherefast`` determinant test
+   :footcite:`shewchuk1996robust`. Near-degenerate tets, whose computed
+   circumcenters are unreliable, thereby always take the robust
+   determinant path.
 
-2. **Extract boundary.** Walk cavity tets; any face whose neighbor is NULL
-   or outside the cavity is a boundary face. Collect the data vertices on
-   these faces -- they are the natural neighbors.
+2. **Extract boundary.** During the BFS, any face of a cavity tet whose
+   neighbor is NULL or outside the cavity is a boundary face. Collect the
+   data vertices on these faces -- they are the natural neighbors.
 
 3. **Old contributions.** For each cavity tet and each of its vertices
    that is a natural neighbor, compute the Voronoi subcell volume (six
@@ -190,14 +197,17 @@ The per-query algorithm:
 
 Thread safety comes from the scratch buffer: each thread gets its own
 ``if_scratch`` struct containing the BFS stack, cavity list, visited hash
-set, boundary face list, neighbor tracking arrays, and a face circumcenter
-cache. The mesh itself is never written to.
+set (which also records each tested tet's in/out verdict), boundary face
+list, and neighbor tracking arrays. The mesh itself is never written to.
 
-The face circumcenter cache deserves a note. Many cavity tets share faces,
-so the same face circumcenter gets needed repeatedly. We cache these in an
-open-addressed hash table keyed by sorted vertex pointer triples. Virtual
-tet faces involving the query point are not cached (the query changes
-every time), but data-only faces are.
+The circumcenters deserve a note. The mesh is static during queries, so
+the circumcenters of all tets and all mesh faces -- together with the
+in-sphere test thresholds -- are computed once, right after mesh
+construction, and stored in arrays indexed alongside the tets. Per query,
+only the geometry involving the query point itself needs computing: each
+boundary face's virtual tet circumcenter, plus three triangle
+circumcenters through the query and one face edge (each shared by two of
+the face's vertices).
 
 Query points are processed in Morton order (Z-order curve) for spatial
 locality: nearby queries tend to walk similar regions of the mesh, so
